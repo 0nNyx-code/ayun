@@ -51,12 +51,24 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-quad-apk
-          key: cqa-${{ runner.os }}-rust${{ env.RUST_VERSION }}-bdb6132
+          key: cqa-${{ runner.os }}-rust${{ env.RUST_VERSION }}-bdb6132-autooverlay
 
       - name: Install cargo-quad-apk (fork Rust 2024)
         if: steps.cqa.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           git clone --depth 1 https://github.com/hoklims/cargo-quad-apk /tmp/cargo-quad-apk
+          # aapt2 memperlakukan -R kedua sebagai OVERLAY, jadi resource baru
+          # (ikon adaptif + values/colors) ditolak dengan
+          # "does not override an existing resource". Tool ini tidak pernah
+          # mengirim --auto-add-overlay, jadi kita tambahkan sendiri.
+          sed -i 's/\.arg("link")/.arg("link").arg("--auto-add-overlay")/' \
+            /tmp/cargo-quad-apk/src/ops/build.rs
+          if ! grep -q -- '--auto-add-overlay' /tmp/cargo-quad-apk/src/ops/build.rs; then
+            echo "::error::patch --auto-add-overlay gagal diterapkan"
+            exit 1
+          fi
+          grep -n -- '--auto-add-overlay' /tmp/cargo-quad-apk/src/ops/build.rs
           cargo install --path /tmp/cargo-quad-apk
           cargo quad-apk --version || true
 
