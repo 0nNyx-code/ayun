@@ -12,7 +12,8 @@ permissions:
   contents: write
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: full
   NDK_VERSION: "28.2.13676358"
   RUST_VERSION: "1.95.0"
   BUILD_TOOLS: "35.0.0"
@@ -60,7 +61,32 @@ jobs:
           cargo quad-apk --version || true
 
       - name: Build APK (release, arm64 + x86_64)
-        run: cargo quad-apk build --release
+        shell: bash
+        run: |
+          set -o pipefail
+          rc=0
+          cargo quad-apk build --release 2>&1 | tee /tmp/build.log || rc=$?
+          echo "build exit=$rc"
+          if [ "$rc" -ne 0 ]; then
+            {
+              echo "build exit=$rc"
+              echo "===== ERROR / PANIC ====="
+              grep -n -E "^(error|Error|thread '|panic|note: |Caused by|  )" /tmp/build.log | head -300 || true
+              echo "===== TAIL 200 ====="
+              tail -200 /tmp/build.log
+            } > /tmp/ci-log.txt 2>&1
+            # Log publik: push ke branch ci-logs supaya bisa dibaca tanpa auth.
+            rm -rf /tmp/pub && mkdir -p /tmp/pub
+            cd /tmp/pub
+            git init -q
+            git checkout -q -b ci-logs
+            cp /tmp/ci-log.txt ci-log.txt
+            git -c user.name="ci" -c user.email="ci@local" add ci-log.txt
+            git -c user.name="ci" -c user.email="ci@local" commit -qm "ci: log build gagal ${GITHUB_SHA}"
+            git push -q --force \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-logs || true
+            exit "$rc"
+          fi
 
       - name: Verify + stage APK
         shell: bash
