@@ -62,20 +62,32 @@ jobs:
 
       - name: Build APK (release, arm64 + x86_64)
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
           rc=0
           cargo quad-apk build --release 2>&1 | tee /tmp/build.log || rc=$?
           echo "build exit=$rc"
           if [ "$rc" -ne 0 ]; then
+            # 1) Annotation: terbaca tanpa auth lewat check-runs/annotations.
+            grep -a -n -E "panicked|^error|^error\[|error:|Error:|Caused by:" /tmp/build.log \
+              | head -6 > /tmp/ann.txt || true
+            tail -4 /tmp/build.log >> /tmp/ann.txt || true
+            while IFS= read -r line; do
+              line="${line//'%'/'%25'}"
+              line="${line//$'\r'/}"
+              echo "::error title=build::$(printf '%s' "$line" | cut -c1-900)"
+            done < /tmp/ann.txt
+
+            # 2) Log publik lengkap di branch ci-logs.
             {
               echo "build exit=$rc"
               echo "===== ERROR / PANIC ====="
-              grep -n -E "^(error|Error|thread '|panic|note: |Caused by|  )" /tmp/build.log | head -300 || true
-              echo "===== TAIL 200 ====="
-              tail -200 /tmp/build.log
+              grep -a -n -E "panicked|^error|^error\[|error:|Error:|Caused by:|note: " /tmp/build.log | head -200 || true
+              echo "===== TAIL 250 ====="
+              tail -250 /tmp/build.log
             } > /tmp/ci-log.txt 2>&1
-            # Log publik: push ke branch ci-logs supaya bisa dibaca tanpa auth.
             rm -rf /tmp/pub && mkdir -p /tmp/pub
             cd /tmp/pub
             git init -q

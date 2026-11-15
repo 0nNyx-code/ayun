@@ -165,10 +165,14 @@ fn hill_layer(
 
 /// Pulau melayang: batu trapesium + rumput 3 nilai + pohon kecil.
 /// Ini yang bikin langit terasa punya KEDALAMAN, bukan wallpaper.
-fn island_at(x: f32, y: f32, w: f32, h: f32, seed: u32) {
+fn island_at(x: f32, y: f32, w: f32, h: f32, seed: u32, haze: f32) {
     let hw = w * 0.5;
     let bot = vec2(x + (hash01(seed) - 0.5) * w * 0.16, y + h);
-    let rock = mix(PLUM, PAPER_3, 0.42);
+    // Haze atmosferik: makin jauh makin ditarik ke warna langit bawah.
+    // Tanpa ini pulau solid di tengah layar kebaca sebagai pijakan, bukan latar.
+    let rock = mix(mix(PLUM, PAPER_3, 0.42), SKY_BOT, haze);
+    let grass = mix(HILL_MID, SKY_BOT, haze * 0.82);
+    let tree = mix(HILL_NEAR, SKY_BOT, haze * 0.70);
 
     // badan batu
     draw_triangle(vec2(x - hw, y), vec2(x + hw, y), bot, rock);
@@ -177,14 +181,14 @@ fn island_at(x: f32, y: f32, w: f32, h: f32, seed: u32) {
         vec2(x + hw, y),
         bot,
         vec2(x + hw * 0.12, y + h * 0.62),
-        shade(rock, 0.74),
+        shade(rock, 0.86),
     );
     // lapisan terang kiri
     draw_triangle(
         vec2(x - hw, y),
         vec2(x - hw * 0.12, y + h * 0.42),
         bot,
-        mix(rock, PAPER, 0.20),
+        mix(rock, PAPER, 0.14),
     );
     // garis retak tipis
     draw_line(
@@ -193,20 +197,26 @@ fn island_at(x: f32, y: f32, w: f32, h: f32, seed: u32) {
         x + hw * 0.05,
         y + h * 0.55,
         1.4,
-        with_a(INK, 0.10),
+        with_a(INK, 0.08 * (1.0 - haze)),
     );
 
     // rumput: 3 nilai (gelap, badan, kilau)
-    draw_rectangle(x - hw - 4.0, y - 8.0, w + 8.0, 14.0, shade(HILL_MID, 0.80));
-    draw_rectangle(x - hw - 4.0, y - 13.0, w + 8.0, 10.0, HILL_MID);
-    draw_rectangle(x - hw - 4.0, y - 13.0, w + 8.0, 3.5, mix(HILL_MID, PAPER, 0.42));
+    draw_rectangle(x - hw - 4.0, y - 8.0, w + 8.0, 14.0, shade(grass, 0.86));
+    draw_rectangle(x - hw - 4.0, y - 13.0, w + 8.0, 10.0, grass);
+    draw_rectangle(
+        x - hw - 4.0,
+        y - 13.0,
+        w + 8.0,
+        3.5,
+        mix(grass, PAPER, 0.30),
+    );
 
     // pohon kecil
     let tx = x + (hash01(seed ^ 7) - 0.5) * w * 0.52;
-    draw_rectangle(tx - 2.0, y - 28.0, 4.0, 16.0, shade(PLUM, 0.78));
-    draw_circle(tx + 1.0, y - 33.0, 11.0, shade(HILL_NEAR, 0.78));
-    draw_circle(tx, y - 34.0, 9.5, HILL_NEAR);
-    draw_circle(tx - 3.5, y - 37.5, 4.2, mix(HILL_NEAR, PAPER, 0.38));
+    draw_rectangle(tx - 2.0, y - 28.0, 4.0, 16.0, shade(mix(PLUM, SKY_BOT, haze), 0.88));
+    draw_circle(tx + 1.0, y - 33.0, 11.0, shade(tree, 0.88));
+    draw_circle(tx, y - 34.0, 9.5, tree);
+    draw_circle(tx - 3.5, y - 37.5, 4.2, mix(tree, PAPER, 0.24));
 }
 
 /// Awan: 3-5 gumpalan, versi gelap digambar dulu sebagai alas bawah.
@@ -416,6 +426,7 @@ fn draw_txt_c(t: &str, x: f32, y: f32, size: f32, color: Color, font: &Option<Fo
 }
 
 /// Teks dengan tracking (jarak antar huruf) — dipakai untuk wordmark.
+#[allow(dead_code)]
 fn draw_tracked_c(t: &str, cx: f32, y: f32, size: f32, tracking: f32, color: Color, font: &Option<Font>) {
     let total: f32 = t.chars().map(|c| text_w(&c.to_string(), font, size) + tracking).sum::<f32>() - tracking;
     let mut x = cx - total * 0.5;
@@ -1668,17 +1679,17 @@ impl Game {
         }
 
         // ---- pulau melayang: kedalaman paling murah yang ada
-        let isles: [(f32, f32, f32, f32, f32, u32); 3] = [
-            (0.34, 0.28, 74.0, 54.0, 0.10, 11),
-            (0.62, 0.40, 104.0, 76.0, 0.16, 29),
-            (0.15, 0.46, 58.0, 42.0, 0.20, 53),
+        let isles: [(f32, f32, f32, f32, f32, u32, f32); 3] = [
+            (0.34, 0.28, 74.0, 54.0, 0.10, 11, 0.58),
+            (0.62, 0.40, 104.0, 76.0, 0.16, 29, 0.42),
+            (0.15, 0.46, 58.0, 42.0, 0.20, 53, 0.32),
         ];
-        for (fx, fy, iw, ih, plx, sd) in isles {
+        for (fx, fy, iw, ih, plx, sd, haze) in isles {
             let span = vw + 700.0;
             let drift = cam.x * plx + self.time * (3.0 + plx * 10.0) + fx * span;
             let x = left - 350.0 + drift.rem_euclid(span);
             let y = top + vh * fy + (self.time * 0.7 + sd as f32).sin() * 6.0;
-            island_at(x, y, iw, ih, sd);
+            island_at(x, y, iw, ih, sd, haze);
         }
 
         // ---- layang-layang: satu objek kecil, langit langsung terasa hidup
