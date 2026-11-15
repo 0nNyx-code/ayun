@@ -1,0 +1,33 @@
+[package]
+name = "ayun"
+version = "0.1.0"
+edition = "2021"
+description = "AYUN — game ayunan satu jempol, Rust + macroquad -> WebAssembly"
+
+[dependencies]
+macroquad = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = false
+codegen-units = 16
+panic = "abort"
+
+# ------------------------------------------------------------------ android --
+# Dibaca oleh cargo-quad-apk (https://github.com/hoklims/cargo-quad-apk).
+# Target SDK 35 + NDK r28 => lolos syarat 16 KiB page size Android 15+.
+[package.metadata.android]
+android_version = 35
+target_sdk_version = 35
+min_sdk_version = 26
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+package_name = "com.gosgila.ayun"
+label = "AYUN"
+version_code = 1
+version_name = "0.1.0"
+fullscreen = true
+res = "android-res"
+icon = "@mipmap/ic_launcher"
+
+[package.metadata.android.activity_attributes]
+"android:screenOrientation" = "portrait"

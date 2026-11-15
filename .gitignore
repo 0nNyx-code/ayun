@@ -1,0 +1,6 @@
+target/
+web/*.wasm
+web/*.js.map
+*.apk
+*.keystore
+.DS_Store

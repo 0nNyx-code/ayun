@@ -1,0 +1,102 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: "28.2.13676358"
+  RUST_VERSION: "1.95.0"
+  BUILD_TOOLS: "35.0.0"
+
+jobs:
+  apk:
+    name: Build signed APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust ${{ env.RUST_VERSION }} + target Android
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustup target add aarch64-linux-android x86_64-linux-android
+
+      - name: Android SDK + NDK r28
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;${{ env.BUILD_TOOLS }} ndk;${{ env.NDK_VERSION }}"
+
+      - name: Export NDK_HOME / ANDROID_HOME
+        run: |
+          echo "NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-quad-apk binary
+        id: cqa
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-quad-apk
+          key: cqa-${{ runner.os }}-rust${{ env.RUST_VERSION }}-bdb6132
+
+      - name: Install cargo-quad-apk (fork Rust 2024)
+        if: steps.cqa.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/hoklims/cargo-quad-apk /tmp/cargo-quad-apk
+          cargo install --path /tmp/cargo-quad-apk
+          cargo quad-apk --version || true
+
+      - name: Build APK (release, arm64 + x86_64)
+        run: cargo quad-apk build --release
+
+      - name: Verify + stage APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find target/android-artifacts/release/apk -name '*.apk' ! -name '*_unaligned.apk' -print -quit)"
+          if [ -z "$apk" ]; then
+            echo "::error::Tidak ada APK yang dihasilkan"
+            find target/android-artifacts -maxdepth 4 -type d || true
+            exit 1
+          fi
+          echo "APK: $apk"
+          "$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS/apksigner" verify --verbose "$apk"
+          "$ANDROID_SDK_ROOT/build-tools/$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$apk" | tail -3
+          unzip -Z1 "$apk" | grep '^lib/' | sort
+          cp "$apk" AYUN.apk
+          ls -lh AYUN.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AYUN-apk
+          path: AYUN.apk
+          if-no-files-found: error
+
+      - name: Publish release apk-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view apk-latest >/dev/null 2>&1; then
+            gh release upload apk-latest AYUN.apk --clobber
+          else
+            gh release create apk-latest AYUN.apk \
+              --title "AYUN — build terbaru" \
+              --notes "APK build otomatis dari commit ${GITHUB_SHA}." \
+              --latest
+          fi
