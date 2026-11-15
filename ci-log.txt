@@ -1,0 +1,99 @@
+build exit=101
+===== ERROR / PANIC =====
+87:build/res2.zip@values_colors.arsc.flat: error: resource color/ic_launcher_background does not override an existing resource.
+88:build/res2.zip@values_colors.arsc.flat: note: define an <add-resource> tag or use --auto-add-overlay.
+89:build/res2.zip@values_colors.arsc.flat: error: failed to merge resource table.
+90:error: failed parsing overlays.
+91:error: process didn't exit successfully: `/usr/local/lib/android/sdk/build-tools/37.0.0/aapt2 link -o ayun_unaligned.apk -I /usr/local/lib/android/sdk/platforms/android-35/android.jar --manifest AndroidManifest.xml -R build/res.zip --java build/gen -R build/res2.zip` (exit status: 1)
+===== TAIL 250 =====
+    Updating crates.io index
+     Locking 37 packages to latest compatible versions
+ Downloading crates ...
+  Downloaded fdeflate v0.3.7
+  Downloaded core_maths v0.1.1
+  Downloaded adler2 v2.0.1
+  Downloaded macroquad_macro v0.1.8
+  Downloaded color_quant v1.1.0
+  Downloaded quad-rand v0.2.3
+  Downloaded simd-adler32 v0.3.10
+  Downloaded miniz_oxide v0.9.1
+  Downloaded bytemuck v1.25.2
+  Downloaded miniz_oxide v0.8.9
+  Downloaded png v0.17.16
+  Downloaded libm v0.2.16
+  Downloaded fontdue v0.9.5
+  Downloaded ttf-parser v0.25.1
+  Downloaded miniquad v0.4.11
+  Downloaded ndk-sys v0.2.2
+  Downloaded glam v0.27.0
+  Downloaded macroquad v0.4.16
+  Downloaded image v0.24.9
+   Compiling simd-adler32 v0.3.10
+   Compiling crc32fast v1.5.5
+   Compiling adler2 v2.0.1
+   Compiling libm v0.2.16
+   Compiling cfg-if v1.0.5
+   Compiling autocfg v1.5.1
+   Compiling miniz_oxide v0.9.1
+   Compiling num-traits v0.2.19
+   Compiling libc v0.2.191
+   Compiling flate2 v1.1.11
+   Compiling core_maths v0.1.1
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling equivalent v1.0.3
+   Compiling foldhash v0.1.5
+   Compiling bitflags v1.3.2
+   Compiling miniquad v0.4.11
+   Compiling allocator-api2 v0.2.21
+   Compiling png v0.17.16
+   Compiling hashbrown v0.15.5
+   Compiling ttf-parser v0.25.1
+   Compiling ndk-sys v0.2.2
+   Compiling bytemuck v1.25.2
+   Compiling color_quant v1.1.0
+   Compiling byteorder v1.5.0
+   Compiling image v0.24.9
+   Compiling fontdue v0.9.5
+   Compiling macroquad_macro v0.1.8
+   Compiling glam v0.27.0
+   Compiling quad-rand v0.2.3
+   Compiling macroquad v0.4.16
+   Compiling ayun v0.1.0 (/home/runner/work/ayun/ayun)
+    Finished `release` profile [optimized] target(s) in 8.45s
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling crc32fast v1.5.5
+   Compiling libm v0.2.16
+   Compiling cfg-if v1.0.5
+   Compiling libc v0.2.191
+   Compiling miniz_oxide v0.9.1
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling core_maths v0.1.1
+   Compiling flate2 v1.1.11
+   Compiling num-traits v0.2.19
+   Compiling bitflags v1.3.2
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.1.5
+   Compiling equivalent v1.0.3
+   Compiling miniquad v0.4.11
+   Compiling png v0.17.16
+   Compiling hashbrown v0.15.5
+   Compiling ttf-parser v0.25.1
+   Compiling byteorder v1.5.0
+   Compiling color_quant v1.1.0
+   Compiling bytemuck v1.25.2
+   Compiling ndk-sys v0.2.2
+   Compiling image v0.24.9
+   Compiling fontdue v0.9.5
+   Compiling quad-rand v0.2.3
+   Compiling glam v0.27.0
+   Compiling macroquad v0.4.16
+   Compiling ayun v0.1.0 (/home/runner/work/ayun/ayun)
+    Finished `release` profile [optimized] target(s) in 15.82s
+build/res2.zip@values_colors.arsc.flat: error: resource color/ic_launcher_background does not override an existing resource.
+build/res2.zip@values_colors.arsc.flat: note: define an <add-resource> tag or use --auto-add-overlay.
+build/res2.zip@values_colors.arsc.flat: error: failed to merge resource table.
+error: failed parsing overlays.
+error: process didn't exit successfully: `/usr/local/lib/android/sdk/build-tools/37.0.0/aapt2 link -o ayun_unaligned.apk -I /usr/local/lib/android/sdk/platforms/android-35/android.jar --manifest AndroidManifest.xml -R build/res.zip --java build/gen -R build/res2.zip` (exit status: 1)
