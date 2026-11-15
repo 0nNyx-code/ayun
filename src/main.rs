@@ -1748,11 +1748,12 @@ impl Game {
         }
 
         // ================================================================ BUKIT
-        // Puncak bukit dijepit supaya tidak menutupi jurang.
-        let hz = (cam.y + vh * 0.56).min(self.void_y - 26.0);
-        hill_layer(cam.x, vw, hz + 26.0, 0.10, HILL_FAR, 17, 200.0, 74.0);
-        hill_layer(cam.x, vw, hz + 112.0, 0.20, HILL_MID, 41, 222.0, 104.0);
-        hill_layer(cam.x, vw, hz + 232.0, 0.34, HILL_NEAR, 73, 250.0, 138.0);
+        // Kamera mengikuti pemain, jadi bukit dipatok relatif kamera (backdrop).
+        // Dijepit di atas jurang supaya tanah tidak "naik" menutupi lubang.
+        let hz = (cam.y + vh * 0.44).min(self.void_y - vh * 0.12);
+        hill_layer(cam.x, vw, hz, 0.10, HILL_FAR, 17, 200.0, 74.0);
+        hill_layer(cam.x, vw, hz + 130.0, 0.20, HILL_MID, 41, 222.0, 104.0);
+        hill_layer(cam.x, vw, hz + 250.0, 0.34, HILL_NEAR, 73, 250.0, 138.0);
 
         // =============================================================== JURANG
         // Bukan lapisan transparan: blok pekat yang benar-benar "turun".
@@ -1824,16 +1825,25 @@ impl Game {
                 draw_circle_lines(a.pos.x, a.pos.y, hr * 0.90, 2.5, with_a(VERMILION, 0.52));
             }
 
-            // ekstrusi gelap → badan → bidang terang → lubang → kilau
-            draw_circle(a.pos.x + 2.2, a.pos.y + 3.2, r + 3.5, shade(TEAL, 0.56));
-            draw_circle(a.pos.x, a.pos.y, r + 3.5, TEAL);
-            draw_circle(a.pos.x - 1.0, a.pos.y - 1.4, r + 2.6, mix(TEAL, PAPER, 0.26));
-            draw_circle(a.pos.x, a.pos.y, r - 3.0, shade(TEAL, 0.40));
+            // Cakram KREM + stroke tinta + lubang teal.
+            // Versi teal-di-atas-bukit-hijau tadi tenggelam; krem selalu menang
+            // kontras di latar apa pun, dan lubang gelap bikin tali terlihat
+            // benar-benar masuk ke dalam benda.
+            draw_circle(a.pos.x + 2.4, a.pos.y + 3.4, r + 3.6, with_a(INK, 0.20));
+            draw_circle(a.pos.x, a.pos.y, r + 3.6, PAPER);
+            // bibir bawah: satu nada lebih gelap → terbaca sebagai piringan tebal
+            draw_circle(a.pos.x, a.pos.y + 1.8, r + 1.8, mix(PAPER_3, PAPER, 0.25));
+            draw_circle(a.pos.x, a.pos.y, r - 2.2, PAPER);
+            draw_circle_lines(a.pos.x, a.pos.y, r + 3.2, 2.6, INK);
+            // lubang tali
+            draw_circle(a.pos.x, a.pos.y, r - 4.0, shade(TEAL, 0.46));
+            draw_circle_lines(a.pos.x, a.pos.y, r - 4.0, 1.8, shade(TEAL, 0.26));
+            // kilau di dinding lubang (kiri-atas) → lubang terasa punya kedalaman
             draw_circle(
-                a.pos.x - r * 0.30,
-                a.pos.y - r * 0.32,
-                r * 0.34,
-                with_a(PAPER, 0.62),
+                a.pos.x - r * 0.20,
+                a.pos.y - r * 0.24,
+                r * 0.26,
+                with_a(mix(TEAL, PAPER, 0.55), 0.55),
             );
 
             // cincin "baru muncul"
@@ -1876,6 +1886,9 @@ impl Game {
             draw_circle(f.pos.x, f.pos.y, r * 2.0, with_a(col, 0.13 * tw));
             draw_circle(f.pos.x + 1.0, f.pos.y + 1.6, r, shade(col, 0.72));
             draw_circle(f.pos.x, f.pos.y, r, col);
+            // rim gelap senada: mustard di atas bukit hijau tadinya lumer jadi
+            // satu titik pucat. Rim 1,2 px cukup buat memisahkan siluet.
+            draw_circle_lines(f.pos.x, f.pos.y, r, 1.2, with_a(shade(col, 0.38), 0.85));
             draw_circle(f.pos.x - r * 0.32, f.pos.y - r * 0.34, r * 0.36, with_a(PAPER, 0.85));
         }
 
