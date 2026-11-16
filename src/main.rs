@@ -23,7 +23,7 @@ const VERMILION: Color = Color::new(1.000, 0.420, 0.290, 1.0); // #FF6B4A
 const TEAL: Color = Color::new(0.184, 0.710, 0.604, 1.0); // #2FB59A
 const MUSTARD: Color = Color::new(1.000, 0.761, 0.302, 1.0); // #FFC24D
 const PLUM: Color = Color::new(0.357, 0.290, 0.420, 1.0); // #5B4A6B
-// Hasil tumpang tindih teal + mustard (overprint), sengaja opaque.
+                                                          // Hasil tumpang tindih teal + mustard (overprint), sengaja opaque.
 const OVERPRINT: Color = Color::new(0.376, 0.584, 0.345, 1.0);
 
 // ---- langit & lanskap (diorama) -------------------------------------------
@@ -40,7 +40,43 @@ const BODY: Color = Color::new(0.290, 0.243, 0.361, 1.0); // #4A3E5C
 const GRAVITY: f32 = 2150.0;
 const STEP: f32 = 1.0 / 120.0;
 const MAX_SPEED: f32 = 1560.0;
-const REACH: f32 = 430.0;
+/// Jangkauan tangkap. Dinaikkan dari 430 → 510 supaya jangkar yang lebih
+/// tinggi tetap bisa dicapai; ditambah bonus vertikal di `best_anchor`.
+const REACH: f32 = 510.0;
+/// Tap = lompat. Di bawah durasi ini, lepas jari dianggap tap, bukan lepas ayun.
+const TAP_MAX: f32 = 0.13;
+/// Tahan selama ini = tali menangkap. Di bawahnya, jari dianggap tap.
+/// 85 ms cukup kecil untuk tidak terasa lambat, cukup besar untuk
+/// membedakan "ketuk" dari "tahan" di layar sentuh.
+const HOLD_ATTACH: f32 = 0.085;
+/// Lompatan dari tanah/udara dan lompatan kedua.
+const JUMP_V: f32 = 800.0;
+const AIR_JUMP_V: f32 = 690.0;
+/// Winch: tali memendek selama pemain benar-benar mati (hampir diam) →
+/// pemain tertarik ke atas. Ini yang membunuh rasa "stuck" saat ayunan mati.
+/// Gerbangnya sengaja sangat ketat: kalau winch bekerja sambil berayun,
+/// panjang tali yang berubah terus-menerus malah memompa energi tanpa henti
+/// dan pemain jadi muter lewat atas jangkar.
+const REEL: f32 = 70.0;
+const REEL_GATE: f32 = 80.0;
+const ROPE_MIN: f32 = 150.0;
+/// Auto-pump. Hanya bekerja di "zona tenaga": di bawah jangkar DAN sedang
+/// bergerak maju. Arah dorongnya selalu ke depan, jadi tidak pernah melawan
+/// gerak — dan karena butuh vt > 0, tidak ada posisi setimbang yang bikin
+/// pemain menggantung miring seperti patung.
+const PUMP_FORCE: f32 = 900.0;
+const PUMP_TARGET: f32 = 900.0;
+/// Batas kecepatan selama bergantung. Tanpa ini pump terus menambah energi
+/// tiap putaran dan pemain bisa lewat di atas jangkar.
+const ATTACH_CAP: f32 = 980.0;
+/// Dorongan sangat kecil saat benar-benar diam, untuk memecah simetri:
+/// tanpa ini, pemain yang menggantung tepat di bawah jangkar tidak punya
+/// komponen tangensial sama sekali, jadi gaya sebesar apa pun tidak
+/// mengayunkannya.
+const NUDGE: f32 = 130.0;
+/// Kunci input sesaat setelah pindah layar. Tanpa ini, tap yang dipakai
+/// meluncurkan aplikasi langsung menembus menu (keluhan "nggak ada UI start").
+const INPUT_LOCK: f32 = 0.42;
 
 // ------------------------------------------------------------- utilitas ----
 fn mix(a: Color, b: Color, t: f32) -> Color {
@@ -119,7 +155,9 @@ fn sky_gradient(left: f32, top: f32, vw: f32, vh: f32) {
     }
 }
 
-/// Bukit bulat berlapis: 3 pass (dasar gelap, badan, highlight) = volume.
+/// Bukit bulat berlapis: 4 pass (bayangan jatuh, dasar gelap, badan, highlight).
+/// Pass bayangan inilah yang membuat lapisan depan terlihat MELAYANG di atas
+/// lapisan belakang — depth cue paling murah yang ada.
 fn hill_layer(
     cam_x: f32,
     vw: f32,
@@ -134,7 +172,17 @@ fn hill_layer(
     let i0 = ((ox - vw * 0.62) / step).floor() as i64 - 1;
     let i1 = ((ox + vw * 0.62) / step).ceil() as i64 + 1;
 
+    // ---- pass 0: bayangan lembut, digeser ke kanan-bawah
     let mut i = i0;
+    while i <= i1 {
+        let h = hash01(i as u32 ^ seed.wrapping_mul(2654435761));
+        let r = step * (0.62 + 0.55 * h);
+        let x = i as f32 * step - ox;
+        let y = base_y + (1.0 - h) * amp;
+        draw_circle(x + 7.0, y + r * 0.34 + 11.0, r * 1.04, with_a(PLUM, 0.11));
+        i += 1;
+    }
+    i = i0;
     while i <= i1 {
         let h = hash01(i as u32 ^ seed.wrapping_mul(2654435761));
         let r = step * (0.62 + 0.55 * h);
@@ -160,6 +208,67 @@ fn hill_layer(
         let y = base_y + (1.0 - h) * amp;
         draw_circle(x - r * 0.20, y - r * 0.22, r * 0.46, mix(col, PAPER, 0.22));
         i += 1;
+    }
+}
+
+/// Foreground: lapisan paling dekat (parallax > 1). Digambar PALING AKHIR,
+/// jadi ia memotong semua yang ada di belakangnya. Ini depth cue yang bikin
+/// diorama terasa punya ruang — bukan gambar datar.
+fn foreground_at(cam_x: f32, cam_y: f32, vw: f32, vh: f32, t: f32, seed: u32) {
+    // Hijau tua, bukan abu-abu: siluet dedaunan tetap terasa bagian dari dunia.
+    let col = mix(shade(PLUM, 0.40), shade(HILL_NEAR, 0.34), 0.55);
+    let col2 = mix(shade(PLUM, 0.54), shade(HILL_NEAR, 0.46), 0.55);
+    let rim = mix(col2, PAPER, 0.16);
+    let top = cam_y - vh * 0.5 - 24.0;
+
+    // ---- sulur menggantung dari tepi atas
+    let ox = cam_x * 1.38;
+    let step = 216.0;
+    let i0 = ((ox - vw * 0.62) / step).floor() as i64 - 1;
+    let i1 = ((ox + vw * 0.62) / step).ceil() as i64 + 1;
+    let mut i = i0;
+    while i <= i1 {
+        let h = hash01(i as u32 ^ seed);
+        let h2 = hash01(i as u32 ^ seed ^ 0x9E37_79B9);
+        let x = i as f32 * step - ox;
+        let len = 30.0 + h * 96.0;
+        let sway = (t * 0.85 + h2 * 6.28).sin() * 10.0;
+        // batang tipis
+        draw_line(x, top, x + sway, top + len, 3.2, col);
+        // daun: tiga pasang kecil, makin ke ujung makin kecil
+        for k in 0..3 {
+            let kf = k as f32;
+            let f = 0.50 + kf * 0.18;
+            let lx = x + sway * f;
+            let ly = top + len * f;
+            let lr = (9.0 + h * 5.0) * (1.0 - kf * 0.16);
+            let side = if k % 2 == 0 { -1.0 } else { 1.0 };
+            draw_circle(lx + side * lr * 0.95, ly, lr, col);
+            draw_circle(lx + side * lr * 0.35, ly - lr * 0.20, lr * 0.72, col2);
+            draw_circle(
+                lx + side * lr * 0.55,
+                ly - lr * 0.42,
+                lr * 0.30,
+                with_a(rim, 0.55),
+            );
+        }
+        i += 1;
+    }
+
+    // ---- daun melayang paling depan: kecil, gelap, cepat
+    for k in 0..4 {
+        let kf = k as f32;
+        let span = vw + 420.0;
+        let lx = -210.0 + (t * (46.0 + kf * 15.0) + kf * 181.0 + cam_x * 1.62).rem_euclid(span);
+        let ly = cam_y - vh * 0.5 + vh * (0.16 + kf * 0.20) + (t * 0.75 + kf * 2.1).sin() * 20.0;
+        let tilt = (t * 0.9 + kf * 1.7).sin() * 0.55;
+        let s = 5.0 + kf * 1.2;
+        let c = tilt.cos();
+        let sn = tilt.sin();
+        let tip = vec2(lx + s * 3.2 * c, ly + s * 3.2 * sn);
+        draw_line(lx, ly, tip.x, tip.y, 1.2, with_a(col, 0.50));
+        draw_circle(lx, ly, s * 0.9, col);
+        draw_circle(lx + s * 0.85 * c, ly + s * 0.85 * sn, s * 0.62, col2);
     }
 }
 
@@ -213,7 +322,13 @@ fn island_at(x: f32, y: f32, w: f32, h: f32, seed: u32, haze: f32) {
 
     // pohon kecil
     let tx = x + (hash01(seed ^ 7) - 0.5) * w * 0.52;
-    draw_rectangle(tx - 2.0, y - 28.0, 4.0, 16.0, shade(mix(PLUM, SKY_BOT, haze), 0.88));
+    draw_rectangle(
+        tx - 2.0,
+        y - 28.0,
+        4.0,
+        16.0,
+        shade(mix(PLUM, SKY_BOT, haze), 0.88),
+    );
     draw_circle(tx + 1.0, y - 33.0, 11.0, shade(tree, 0.88));
     draw_circle(tx, y - 34.0, 9.5, tree);
     draw_circle(tx - 3.5, y - 37.5, 4.2, mix(tree, PAPER, 0.24));
@@ -290,7 +405,10 @@ struct Rng(u64);
 
 impl Rng {
     fn new(seed: u64) -> Self {
-        Rng(seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) | 1)
+        Rng(seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407)
+            | 1)
     }
     fn next(&mut self) -> u32 {
         let mut x = self.0;
@@ -325,10 +443,22 @@ struct Spring {
 impl Spring {
     #[allow(dead_code)]
     fn new(v: f32) -> Self {
-        Spring { value: v, vel: 0.0, target: v, k: 260.0, d: 24.0 }
+        Spring {
+            value: v,
+            vel: 0.0,
+            target: v,
+            k: 260.0,
+            d: 24.0,
+        }
     }
     fn with_stiffness(v: f32, k: f32, d: f32) -> Self {
-        Spring { value: v, vel: 0.0, target: v, k, d }
+        Spring {
+            value: v,
+            vel: 0.0,
+            target: v,
+            k,
+            d,
+        }
     }
     fn update(&mut self, dt: f32) {
         let dt = dt.min(1.0 / 30.0);
@@ -363,7 +493,11 @@ impl View {
         } else {
             (short * sw / sh, short)
         };
-        View { vw, vh, scale: sw / vw }
+        View {
+            vw,
+            vh,
+            scale: sw / vw,
+        }
     }
     /// Kamera layar (y tumbuh ke bawah).
     ///
@@ -427,14 +561,62 @@ fn draw_txt_c(t: &str, x: f32, y: f32, size: f32, color: Color, font: &Option<Fo
 
 /// Teks dengan tracking (jarak antar huruf) — dipakai untuk wordmark.
 #[allow(dead_code)]
-fn draw_tracked_c(t: &str, cx: f32, y: f32, size: f32, tracking: f32, color: Color, font: &Option<Font>) {
-    let total: f32 = t.chars().map(|c| text_w(&c.to_string(), font, size) + tracking).sum::<f32>() - tracking;
+fn draw_tracked_c(
+    t: &str,
+    cx: f32,
+    y: f32,
+    size: f32,
+    tracking: f32,
+    color: Color,
+    font: &Option<Font>,
+) {
+    let total: f32 = t
+        .chars()
+        .map(|c| text_w(&c.to_string(), font, size) + tracking)
+        .sum::<f32>()
+        - tracking;
     let mut x = cx - total * 0.5;
     for c in t.chars() {
         let s = c.to_string();
         draw_txt(&s, x, y, size, color, font);
         x += text_w(&s, font, size) + tracking;
     }
+}
+
+/// Satu glif dengan skala + rotasi, dipusatkan di (cx, cy).
+/// Dipakai layar kredit: huruf bisa "menghantam" tanpa blur, karena
+/// ukuran raster font tetap dan skalanya lewat font_scale.
+fn draw_glyph(
+    ch: &str,
+    cx: f32,
+    cy: f32,
+    size: f32,
+    scale: f32,
+    rot: f32,
+    color: Color,
+    font: &Option<Font>,
+) {
+    if color.a <= 0.002 || scale <= 0.02 {
+        return;
+    }
+    let s = scale.clamp(0.05, 4.0);
+    let base = (size / s).clamp(8.0, 360.0);
+    let m = measure_text(ch, font.as_ref(), base as u16, 1.0);
+    let w = m.width * s;
+    let h = m.height * s;
+    draw_text_ex(
+        ch,
+        cx - w * 0.5,
+        cy + h * 0.34,
+        TextParams {
+            font: font.as_ref(),
+            font_size: base as u16,
+            font_scale: s,
+            rotation: rot,
+            color,
+            ..Default::default()
+        },
+    );
 }
 
 fn draw_heart(x: f32, y: f32, s: f32, c: Color) {
@@ -454,8 +636,18 @@ fn draw_heart3d(x: f32, y: f32, s: f32, c: Color, a: f32) {
         return;
     }
     let d = shade(c, 0.60);
-    draw_circle(x - s * 0.32 + 1.4, y - s * 0.18 + 2.4, s * 0.38, with_a(d, a));
-    draw_circle(x + s * 0.32 + 1.4, y - s * 0.18 + 2.4, s * 0.38, with_a(d, a));
+    draw_circle(
+        x - s * 0.32 + 1.4,
+        y - s * 0.18 + 2.4,
+        s * 0.38,
+        with_a(d, a),
+    );
+    draw_circle(
+        x + s * 0.32 + 1.4,
+        y - s * 0.18 + 2.4,
+        s * 0.38,
+        with_a(d, a),
+    );
     draw_triangle(
         vec2(x - s * 0.68 + 1.4, y - s * 0.02 + 2.4),
         vec2(x + s * 0.68 + 1.4, y - s * 0.02 + 2.4),
@@ -463,7 +655,12 @@ fn draw_heart3d(x: f32, y: f32, s: f32, c: Color, a: f32) {
         with_a(d, a),
     );
     draw_heart(x, y, s, with_a(c, a));
-    draw_circle(x - s * 0.36, y - s * 0.24, s * 0.15, with_a(PAPER, 0.62 * a));
+    draw_circle(
+        x - s * 0.36,
+        y - s * 0.24,
+        s * 0.15,
+        with_a(PAPER, 0.62 * a),
+    );
 }
 
 /// Kartu pil putih: bayangan lembut, stroke tinta, kilau atas.
@@ -474,7 +671,16 @@ fn pill_card(x: f32, y: f32, w: f32, h: f32, r: f32, a: f32) {
     }
     draw_round_rect(x + 2.0, y + 5.0, w, h, r, with_a(INK, 0.10 * a));
     draw_round_rect(x + 2.0, y + 2.0, w, h, r, with_a(INK, 0.05 * a));
-    draw_round_rect_border(x, y, w, h, r, 2.0, with_a(INK, 0.82 * a), with_a(PAPER, 0.95 * a));
+    draw_round_rect_border(
+        x,
+        y,
+        w,
+        h,
+        r,
+        2.0,
+        with_a(INK, 0.82 * a),
+        with_a(PAPER, 0.95 * a),
+    );
     draw_round_rect(
         x + 4.0,
         y + 2.5,
@@ -499,18 +705,38 @@ struct Sfx {
 impl Sfx {
     async fn load() -> Self {
         Sfx {
-            whoosh: load_sound_from_bytes(include_bytes!("../assets/whoosh.wav")).await.ok(),
-            pop: load_sound_from_bytes(include_bytes!("../assets/pop.wav")).await.ok(),
-            ping: load_sound_from_bytes(include_bytes!("../assets/ping.wav")).await.ok(),
-            perfect: load_sound_from_bytes(include_bytes!("../assets/perfect.wav")).await.ok(),
-            thud: load_sound_from_bytes(include_bytes!("../assets/thud.wav")).await.ok(),
-            combo: load_sound_from_bytes(include_bytes!("../assets/combo.wav")).await.ok(),
-            ui: load_sound_from_bytes(include_bytes!("../assets/ui.wav")).await.ok(),
+            whoosh: load_sound_from_bytes(include_bytes!("../assets/whoosh.wav"))
+                .await
+                .ok(),
+            pop: load_sound_from_bytes(include_bytes!("../assets/pop.wav"))
+                .await
+                .ok(),
+            ping: load_sound_from_bytes(include_bytes!("../assets/ping.wav"))
+                .await
+                .ok(),
+            perfect: load_sound_from_bytes(include_bytes!("../assets/perfect.wav"))
+                .await
+                .ok(),
+            thud: load_sound_from_bytes(include_bytes!("../assets/thud.wav"))
+                .await
+                .ok(),
+            combo: load_sound_from_bytes(include_bytes!("../assets/combo.wav"))
+                .await
+                .ok(),
+            ui: load_sound_from_bytes(include_bytes!("../assets/ui.wav"))
+                .await
+                .ok(),
         }
     }
     fn play(s: &Option<Sound>, vol: f32) {
         if let Some(s) = s {
-            play_sound(s, PlaySoundParams { looped: false, volume: vol });
+            play_sound(
+                s,
+                PlaySoundParams {
+                    looped: false,
+                    volume: vol,
+                },
+            );
         }
     }
 }
@@ -525,6 +751,58 @@ static mut FRAMES: u32 = 0;
 pub extern "C" fn ayun_frames() -> u32 {
     unsafe { FRAMES }
 }
+
+/// Debug: baca satu nilai state (dipakai untuk verifikasi otomatis di web).
+/// 0=px 1=py 2=vx 3=vy 4=rope 5=attached 6=score 7=distance 8=state 9=air_jumps
+/// 10=press_t 11=hold_done 12=input_lock 13=hearts 14=splash_t 15=title_t
+#[no_mangle]
+pub extern "C" fn ayun_debug(i: u32) -> f32 {
+    unsafe {
+        let g = match DEBUG_GAME {
+            Some(p) => &*p,
+            None => return -1.0,
+        };
+        match i {
+            0 => g.player.pos.x,
+            1 => g.player.pos.y,
+            2 => g.player.vel.x,
+            3 => g.player.vel.y,
+            4 => g.player.rope,
+            5 => match g.player.attached {
+                Some(k) => k as f32,
+                None => -1.0,
+            },
+            6 => g.score,
+            7 => g.distance,
+            8 => match g.state {
+                State::Splash => 0.0,
+                State::Title => 1.0,
+                State::Play => 2.0,
+                State::Dead => 3.0,
+            },
+            9 => g.air_jumps as f32,
+            10 => g.press_t,
+            11 => {
+                if g.hold_done {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            12 => g.input_lock,
+            13 => g.hearts as f32,
+            14 => g.splash_t,
+            15 => g.title_t,
+            16 => g.time,
+            17 => JUMP_COUNT as f32,
+            18 => g.pump,
+            _ => -1.0,
+        }
+    }
+}
+
+static mut DEBUG_GAME: Option<*const Game> = None;
+static mut JUMP_COUNT: u32 = 0;
 
 #[no_mangle]
 pub extern "C" fn ayun_get_best() -> f32 {
@@ -556,10 +834,10 @@ struct Fly {
 
 struct Bolt {
     pos: Vec2,
-    t: f32,     // waktu sejak muncul
-    warn: f32,  // durasi peringatan
+    t: f32,    // waktu sejak muncul
+    warn: f32, // durasi peringatan
     struck: bool,
-    life: f32,  // sisa waktu setelah menyambar
+    life: f32, // sisa waktu setelah menyambar
 }
 
 struct Particle {
@@ -601,6 +879,8 @@ struct Ring {
 
 #[derive(PartialEq, Clone, Copy)]
 enum State {
+    /// Layar kredit: nama muncul sebagai kinetic typography, baru masuk menu.
+    Splash,
     Title,
     Play,
     Dead,
@@ -668,6 +948,24 @@ struct Game {
     grain: Vec<(Vec2, f32, f32)>,
     hit_stop: f32,
     title_t: f32,
+    /// Jam layar kredit (State::Splash).
+    splash_t: f32,
+    /// Sisa waktu kunci input setelah ganti layar.
+    input_lock: f32,
+    /// Berapa lama jari sudah menahan.
+    press_t: f32,
+    /// Lepas jari dengan durasi < TAP_MAX = tap (lompat), bukan lepas ayun.
+    tap: bool,
+    /// Sudah memproses ambang tahan untuk tekanan jari saat ini.
+    hold_done: bool,
+    /// Sisa lompatan udara (double jump). Diisi ulang setiap menangkap jangkar.
+    air_jumps: u8,
+    /// Jump buffering: tap yang belum terpakai tetap hidup sebentar.
+    jump_buf: f32,
+    /// Coyote time setelah lepas tali.
+    coyote: f32,
+    /// 0..1 — seberapa keras winch sedang menarik, untuk animasi tali.
+    pump: f32,
     milestone: i32,
     rings: Vec<Ring>,
     bolt_hits: u8,
@@ -691,7 +989,7 @@ impl Game {
         let best = unsafe { BEST_BRIDGE };
         let mut g = Game {
             rng,
-            state: State::Title,
+            state: State::Splash,
             player: Player {
                 pos: Vec2::ZERO,
                 vel: vec2(300.0, 0.0),
@@ -749,6 +1047,15 @@ impl Game {
             grain,
             hit_stop: 0.0,
             title_t: 0.0,
+            splash_t: 0.0,
+            input_lock: 0.0,
+            press_t: 0.0,
+            tap: false,
+            hold_done: false,
+            air_jumps: 2,
+            jump_buf: 0.0,
+            coyote: 0.0,
+            pump: 0.0,
             milestone: 0,
             rings: Vec::new(),
             bolt_hits: 0,
@@ -789,9 +1096,7 @@ impl Game {
     }
 
     fn reset_run(&mut self, view: &View) {
-        let mut rng = Rng::new(
-            (get_time() * 1_000_000.0) as u64 ^ 0x9E37_79B9_7F4A_7C15,
-        );
+        let mut rng = Rng::new((get_time() * 1_000_000.0) as u64 ^ 0x9E37_79B9_7F4A_7C15);
         self.rng = Rng::new(rng.next() as u64);
         self.state = State::Play;
         self.parts.clear();
@@ -819,6 +1124,13 @@ impl Game {
         self.bolt_hits = 0;
         self.last_life = 0.0;
         self.grab_bonus = 0.0;
+        self.air_jumps = 2;
+        self.jump_buf = 0.0;
+        self.coyote = 0.0;
+        self.pump = 0.0;
+        self.press_t = 0.0;
+        self.tap = false;
+        self.hold_done = false;
         self.player.invuln = 1.0;
         self.player.squash.set(1.0);
         self.score_pop.set(1.0);
@@ -833,7 +1145,12 @@ impl Game {
         self.band_y = (self.band_y + self.rng.range(-26.0, 26.0)).clamp(-150.0, 130.0);
         let y = self.band_y + self.rng.range(-128.0, 74.0);
         let pos = vec2(self.last_anchor_x + gap, y);
-        self.anchors.push(Anchor { pos, r: 11.0, phase: self.rng.range(0.0, 6.28), fresh: 1.0 });
+        self.anchors.push(Anchor {
+            pos,
+            r: 11.0,
+            phase: self.rng.range(0.0, 6.28),
+            fresh: 1.0,
+        });
 
         // kunang-kunang di lengkung antara jangkar lama & baru
         let a = vec2(self.last_anchor_x, self.last_anchor_y);
@@ -843,7 +1160,13 @@ impl Game {
             let t = 0.34 + 0.26 * i as f32;
             let p = a.lerp(b, t) + vec2(0.0, -95.0 * (std::f32::consts::PI * t).sin());
             let golden = self.rng.chance(0.11);
-            self.flies.push(Fly { pos: p, phase: self.rng.range(0.0, 6.28), golden, taken: false, pop: 0.0 });
+            self.flies.push(Fly {
+                pos: p,
+                phase: self.rng.range(0.0, 6.28),
+                golden,
+                taken: false,
+                pop: 0.0,
+            });
         }
 
         self.last_anchor_x = pos.x;
@@ -891,11 +1214,34 @@ impl Game {
         }
 
         // keyboard untuk desktop
-        if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::W) || is_key_pressed(KeyCode::Up) {
+        if is_key_pressed(KeyCode::Space)
+            || is_key_pressed(KeyCode::W)
+            || is_key_pressed(KeyCode::Up)
+        {
             self.press = true;
         }
-        if is_key_released(KeyCode::Space) || is_key_released(KeyCode::W) || is_key_released(KeyCode::Up) {
+        if is_key_released(KeyCode::Space)
+            || is_key_released(KeyCode::W)
+            || is_key_released(KeyCode::Up)
+        {
             self.release = true;
+        }
+
+        // ---- klasifikasi tap vs tahan -------------------------------------
+        // Tap pendek = LOMPAT. Tahan = ayun (dan lepas = terlempar).
+        // Durasi dihitung dari `pointer_down` frame sebelumnya, jadi tetap
+        // akurat walau frame-nya panjang di HP lambat.
+        self.tap = false;
+        if self.press {
+            self.press_t = 0.0;
+            self.hold_done = false;
+        }
+        if self.release {
+            if self.press_t <= TAP_MAX {
+                self.tap = true;
+            }
+            self.press_t = 0.0;
+            self.hold_done = false;
         }
 
         self.pointer = pos;
@@ -908,20 +1254,38 @@ impl Game {
         let mut best: Option<(usize, f32)> = None;
         for (i, a) in self.anchors.iter().enumerate() {
             let d = a.pos - p;
-            if d.x < 40.0 {
+            // Sedikit ke belakang masih boleh: jangkar tinggi sering baru
+            // "sejajar" setelah pemain melewatinya. Dulu d.x < 40 membuat
+            // jangkar itu hilang tepat saat paling dibutuhkan.
+            if d.x < -70.0 {
                 continue;
             }
             let dist = d.length();
             // "Nyawa Terakhir" memberi jangkauan +20% selama 3,5 detik.
             let reach = REACH * (1.0 + self.grab_bonus);
-            if dist > reach || dist < 70.0 {
+            // Jangkar di ATAS dapat bonus jangkauan — inilah arah yang
+            // paling sering dicari pemain.
+            let reach_v = if d.y < 0.0 {
+                reach * 1.18
+            } else {
+                reach * 0.92
+            };
+            if dist > reach_v || dist < 64.0 {
                 continue;
             }
-            if d.y > 150.0 {
+            // Batas "jangan ambil yang jauh di bawah" dilonggarkan 150 → 230.
+            if d.y > 230.0 {
                 continue;
             }
             // utamakan yang searah gerak dan berada di atas
-            let cost = dist * 0.55 + (d.y + 40.0).abs() * 0.55 - self.player.vel.normalize_or_zero().dot(d.normalize_or_zero()) * 90.0;
+            let cost = dist * 0.52 + (d.y + 40.0).abs() * 0.52
+                - self
+                    .player
+                    .vel
+                    .normalize_or_zero()
+                    .dot(d.normalize_or_zero())
+                    * 100.0
+                + if d.x < 0.0 { -d.x * 0.85 } else { 0.0 };
             if best.map_or(true, |(_, c)| cost < c) {
                 best = Some((i, cost));
             }
@@ -940,6 +1304,10 @@ impl Game {
             self.player.attached = Some(i);
             self.player.rope = dist.clamp(80.0, REACH);
             self.player.attach_t = 0.0;
+            // Pegang tali = napas baru: dua lompatan udara kembali penuh.
+            self.air_jumps = 2;
+            self.coyote = 0.0;
+            self.jump_buf = 0.0;
             self.player.squash.bump(-3.2);
             // sedikit dorongan supaya ayunan langsung hidup
             let tangent = vec2(-d.y, d.x).normalize_or_zero();
@@ -980,11 +1348,17 @@ impl Game {
         if self.player.attached.is_none() {
             return;
         }
-        // tap kilat (tekan+lepas < 60ms) = ambil jangkar, bukan lepas.
-        if self.player.attach_t < 0.06 {
+        // TAP = LOMPAT. Lepas cepat saat menggantung bukan sekadar jatuh,
+        // tapi melompat naik — ini yang bikin kontrol terasa hidup.
+        if self.tap || self.player.attach_t < TAP_MAX {
+            self.hop_off();
             return;
         }
         self.player.attached = None;
+        self.jump_buf = 0.0;
+        self.coyote = 0.14;
+        // Minimal satu lompatan udara tersisa untuk koreksi arah.
+        self.air_jumps = self.air_jumps.max(1);
         let sp = self.player.vel.length();
         let ang = self.player.vel.y.atan2(self.player.vel.x).abs();
         let held_long = self.player.attach_t > 0.14;
@@ -1038,7 +1412,11 @@ impl Game {
                 life: self.rng.range(0.35, 0.75),
                 max: 0.75,
                 size: self.rng.range(2.0, 4.5),
-                color: if self.rng.chance(0.5) { VERMILION } else { MUSTARD },
+                color: if self.rng.chance(0.5) {
+                    VERMILION
+                } else {
+                    MUSTARD
+                },
                 strip: true,
                 grav: 620.0,
             });
@@ -1070,6 +1448,59 @@ impl Game {
         self.player.vel.y += GRAVITY * dt;
         // gesekan udara tipis
         self.player.vel *= 1.0 - 0.05 * dt;
+
+        // ---- AUTO-PUMP + WINCH --------------------------------------------
+        // Dua hal inilah yang membunuh keluhan "saat diam tali tidak narik
+        // ke atas, jadi stuck":
+        //   1. winch : tali memendek saat pemain benar-benar mati
+        //   2. pump  : dorongan ke depan di zona tenaga, jadi ayunan tidak
+        //              pernah kehabisan energi
+        if let Some(i) = self.player.attached {
+            if i < self.anchors.len() {
+                let a = self.anchors[i].pos;
+                let d = self.player.pos - a;
+                let dist = d.length().max(0.001);
+                let n = d / dist;
+                let sp = self.player.vel.length();
+
+                // winch: hanya saat hampir diam DAN hampir menggantung tegak.
+                // Gerbang `n.y` penting: kalau winch ikut bekerja di ujung
+                // ayunan (saat kecepatan sesaat nol), panjang tali menyusut
+                // terus dan itu memompa energi tanpa henti.
+                if self.player.rope > ROPE_MIN && sp < REEL_GATE && n.y > 0.86 {
+                    self.player.rope = (self.player.rope - REEL * dt).max(ROPE_MIN);
+                }
+
+                // tangent yang SELALU menunjuk ke depan (+x)
+                let mut tangent = vec2(n.y, -n.x);
+                if tangent.x < 0.0 {
+                    tangent = -tangent;
+                }
+                let vt = self.player.vel.dot(tangent);
+
+                // pecah simetri saat benar-benar menggantung mati
+                if sp < 70.0 && n.y > 0.5 {
+                    self.player.vel += tangent * NUDGE * dt;
+                }
+
+                // zona tenaga: di bawah jangkar dan sedang bergerak maju
+                let mut strength = 0.0;
+                if n.y > 0.15 && vt > 0.0 {
+                    strength = ((PUMP_TARGET - vt) / PUMP_TARGET).clamp(0.0, 1.0);
+                    self.player.vel += tangent * PUMP_FORCE * strength * dt;
+                }
+                self.pump = smooth(self.pump, strength, 9.0, dt);
+
+                // batasi energi ayunan
+                let sp2 = self.player.vel.length();
+                if sp2 > ATTACH_CAP {
+                    self.player.vel = self.player.vel / sp2 * ATTACH_CAP;
+                }
+            }
+        } else {
+            self.pump = smooth(self.pump, 0.0, 9.0, dt);
+        }
+
         self.player.pos += self.player.vel * dt;
 
         if let Some(i) = self.player.attached {
@@ -1103,10 +1534,82 @@ impl Game {
         }
     }
 
+    /// Lompat dari udara (tap). Dua kali per "napas", diisi ulang saat
+    /// menangkap jangkar — jadi tap tidak pernah terasa sia-sia.
+    fn do_jump(&mut self, second: bool) {
+        self.jump_buf = 0.0;
+        self.air_jumps = self.air_jumps.saturating_sub(1);
+        unsafe {
+            JUMP_COUNT = JUMP_COUNT.wrapping_add(1);
+        }
+        let v = if second { AIR_JUMP_V } else { JUMP_V };
+        self.player.vel.y = -v;
+        self.player.squash.bump(-4.6);
+        self.shake = self.shake.max(2.2);
+        haptic(10);
+        Sfx::play(&self.sfx.whoosh, 0.34);
+        let p = self.player.pos;
+        self.rings.push(Ring {
+            pos: p + vec2(0.0, 15.0),
+            life: 0.28,
+            max: 0.28,
+            r0: 10.0,
+            r1: if second { 62.0 } else { 42.0 },
+            color: if second { MUSTARD } else { PAPER },
+            w: 2.4,
+        });
+        for k in 0..if second { 14 } else { 8 } {
+            let ang = -1.35 + k as f32 * 0.19;
+            self.parts.push(Particle {
+                pos: p + vec2(0.0, 13.0),
+                vel: vec2(ang.cos(), ang.sin()) * self.rng.range(60.0, 190.0),
+                life: self.rng.range(0.22, 0.46),
+                max: 0.46,
+                size: self.rng.range(1.6, 3.2),
+                color: if second { MUSTARD } else { PAPER_3 },
+                strip: false,
+                grav: 260.0,
+            });
+        }
+    }
+
+    /// Tap saat menggantung = lepas + lompat. Bukan sekadar jatuh.
+    fn hop_off(&mut self) {
+        self.player.attached = None;
+        self.jump_buf = 0.0;
+        self.coyote = 0.14;
+        // lompat lepas ini sudah memakai satu "napas"; sisa satu untuk koreksi
+        self.air_jumps = self.air_jumps.saturating_sub(1);
+        self.player.vel.y = self.player.vel.y.min(-180.0) - 470.0;
+        self.player.vel.x += 60.0;
+        self.player.squash.bump(3.4);
+        self.shake = self.shake.max(2.6);
+        haptic(9);
+        Sfx::play(&self.sfx.pop, 0.42);
+        let p = self.player.pos;
+        self.rings.push(Ring {
+            pos: p,
+            life: 0.26,
+            max: 0.26,
+            r0: 12.0,
+            r1: 54.0,
+            color: TEAL,
+            w: 2.2,
+        });
+    }
+
     // --------------------------------------------------------------- update ----
     fn update(&mut self, dt: f32, view: &View) {
         self.poll_input(view);
         self.time += dt;
+
+        // durasi tahan jari (dipakai untuk bedakan tap vs hold)
+        if self.pointer_down {
+            self.press_t += dt;
+        }
+        self.input_lock = (self.input_lock - dt).max(0.0);
+        self.jump_buf = (self.jump_buf - dt).max(0.0);
+        self.coyote = (self.coyote - dt).max(0.0);
 
         // JS bisa mengisi rekor kapan saja setelah wasm hidup.
         let bridged = unsafe { BEST_BRIDGE };
@@ -1120,6 +1623,11 @@ impl Game {
         } else {
             self.title_t = 0.0;
         }
+        if self.state == State::Splash {
+            self.splash_t += dt;
+        } else {
+            self.splash_t = 0.0;
+        }
 
         self.start_btn.update(dt);
         self.again_btn.update(dt);
@@ -1132,13 +1640,28 @@ impl Game {
         self.score_shown = smooth(self.score_shown, self.score, 9.0, dt);
 
         match self.state {
+            State::Splash => {
+                // Kredit tampil sendiri; tap mempercepat, tapi tidak bisa
+                // membunuh animasi sebelum sempat terbaca (0,8 dtk).
+                let done = self.splash_t > 3.15
+                    || (self.splash_t > 0.85 && self.press && self.input_lock <= 0.0);
+                if done {
+                    self.state = State::Title;
+                    self.title_t = 0.0;
+                    self.input_lock = INPUT_LOCK;
+                    self.start_btn.set(0.0);
+                    self.start_btn.target = 0.0;
+                }
+                self.cam = smooth_v(self.cam, self.cam + vec2(26.0, 0.0), 0.35, dt);
+            }
             State::Title => {
                 self.start_btn.target = 1.0;
-                if self.press {
+                if self.press && self.input_lock <= 0.0 {
                     self.ui_in.bump(6.0);
                     Sfx::play(&self.sfx.ui, 0.5);
                     self.start_btn.bump(-5.0);
                     self.reset_run(view);
+                    self.input_lock = INPUT_LOCK;
                 }
                 self.cam = smooth_v(self.cam, self.cam + vec2(26.0, 0.0), 0.35, dt);
             }
@@ -1146,10 +1669,11 @@ impl Game {
             State::Dead => {
                 self.dead_t += dt;
                 self.again_btn.target = 1.0;
-                if self.dead_t > 0.55 && self.press {
+                if self.dead_t > 0.55 && self.press && self.input_lock <= 0.0 {
                     self.again_btn.bump(-5.0);
                     Sfx::play(&self.sfx.ui, 0.5);
                     self.reset_run(view);
+                    self.input_lock = INPUT_LOCK;
                 }
             }
         }
@@ -1184,11 +1708,42 @@ impl Game {
             }
         }
 
-        if self.press {
-            self.try_attach();
+        // ---- INPUT: TAP = LOMPAT, TAHAN = TANGKAP --------------------------
+        // Tap tidak pernah menangkap tali. Tali baru menangkap setelah jari
+        // ditahan HOLD_ATTACH detik. Jadi "ketuk" selalu berarti lompat,
+        // persis seperti yang diminta — dan ayunan tetap satu jempol.
+        //
+        // input_lock: tap yang dipakai menekan MULAI tidak boleh ikut
+        // terhitung sebagai lepas tali di frame pertama permainan.
+        if self.input_lock <= 0.0 {
+            if self.press {
+                self.hold_done = false;
+                self.jump_buf = 0.0;
+            }
+            if self.pointer_down && !self.hold_done && self.press_t >= HOLD_ATTACH {
+                self.hold_done = true;
+                if self.player.attached.is_none() {
+                    self.try_attach();
+                }
+                // Tahan tapi tidak ada jangkar = tetap lompat, jangan diam saja.
+                if self.player.attached.is_none() && self.air_jumps > 0 {
+                    self.jump_buf = 0.14;
+                }
+            }
+            if self.release {
+                if self.player.attached.is_some() {
+                    self.release();
+                } else if self.tap {
+                    self.jump_buf = 0.14;
+                }
+            }
         }
-        if self.release {
-            self.release();
+
+        // ---- LOMPAT / DOUBLE JUMP -----------------------------------------
+        // Dua lompatan per "napas"; menangkap jangkar mengisi ulang.
+        if self.jump_buf > 0.0 && self.player.attached.is_none() && self.air_jumps > 0 {
+            let second = self.air_jumps == 1;
+            self.do_jump(second);
         }
 
         // fisika fixed step
@@ -1251,7 +1806,6 @@ impl Game {
         if self.hearts <= 0 {
             self.die(1);
         }
-
     }
 
     fn update_flies(&mut self, dt: f32) {
@@ -1483,7 +2037,12 @@ impl Game {
         for (i, a) in self.anchors.iter().enumerate() {
             if a.pos.x > cut || used == Some(i) {
                 remap[i] = keep.len();
-                keep.push(Anchor { pos: a.pos, r: a.r, phase: a.phase, fresh: a.fresh });
+                keep.push(Anchor {
+                    pos: a.pos,
+                    r: a.r,
+                    phase: a.phase,
+                    fresh: a.fresh,
+                });
             }
         }
         if let Some(u) = used {
@@ -1546,7 +2105,10 @@ impl Game {
 
         // jejak syal
         if self.state == State::Play {
-            self.trail.push(Trail { pos: self.player.pos, life: 0.42 });
+            self.trail.push(Trail {
+                pos: self.player.pos,
+                life: 0.42,
+            });
             if self.trail.len() > 26 {
                 self.trail.remove(0);
             }
@@ -1737,7 +2299,12 @@ impl Game {
 
             draw_circle(bx + 1.5, by + 2.5, r, shade(col, 0.76));
             draw_circle(bx, by, r, col);
-            draw_circle(bx - r * 0.22, by - r * 0.24, r * 0.50, mix(col, PAPER, 0.38));
+            draw_circle(
+                bx - r * 0.22,
+                by - r * 0.24,
+                r * 0.50,
+                mix(col, PAPER, 0.38),
+            );
             draw_circle(bx - r * 0.36, by - r * 0.40, r * 0.17, with_a(PAPER, 0.85));
             draw_triangle(
                 vec2(bx - 3.2, by + r * 0.94),
@@ -1808,7 +2375,14 @@ impl Game {
         }
         let mut hx = left;
         while hx < right {
-            draw_line(hx, v0 + 4.0, hx + 12.0, v0 + 4.0, 2.0, with_a(VERMILION, 0.42));
+            draw_line(
+                hx,
+                v0 + 4.0,
+                hx + 12.0,
+                v0 + 4.0,
+                2.0,
+                with_a(VERMILION, 0.42),
+            );
             hx += 24.0;
         }
 
@@ -1900,7 +2474,12 @@ impl Game {
             // rim gelap senada: mustard di atas bukit hijau tadinya lumer jadi
             // satu titik pucat. Rim 1,2 px cukup buat memisahkan siluet.
             draw_circle_lines(f.pos.x, f.pos.y, r, 1.2, with_a(shade(col, 0.38), 0.85));
-            draw_circle(f.pos.x - r * 0.32, f.pos.y - r * 0.34, r * 0.36, with_a(PAPER, 0.85));
+            draw_circle(
+                f.pos.x - r * 0.32,
+                f.pos.y - r * 0.34,
+                r * 0.36,
+                with_a(PAPER, 0.85),
+            );
         }
 
         // ---- petir
@@ -1933,13 +2512,25 @@ impl Game {
                 let mut i = 0;
                 while y < b.pos.y {
                     let nx = b.pos.x + ((i as f32 * 2.7).sin()) * 17.0;
-                    draw_line(x + 2.0, y + 2.0, nx + 2.0, y + 42.0, 4.0, with_a(PLUM, a * 0.5));
+                    draw_line(
+                        x + 2.0,
+                        y + 2.0,
+                        nx + 2.0,
+                        y + 42.0,
+                        4.0,
+                        with_a(PLUM, a * 0.5),
+                    );
                     draw_line(x, y, nx, y + 40.0, 3.0, with_a(MUSTARD, a));
                     x = nx;
                     y += 40.0;
                     i += 1;
                 }
-                draw_circle(b.pos.x, b.pos.y, 76.0 * (1.0 - a), with_a(MUSTARD, a * 0.22));
+                draw_circle(
+                    b.pos.x,
+                    b.pos.y,
+                    76.0 * (1.0 - a),
+                    with_a(MUSTARD, a * 0.22),
+                );
             }
         }
 
@@ -1970,30 +2561,58 @@ impl Game {
                     with_a(p.color, a),
                 );
             } else {
-                draw_circle(
-                    p.pos.x,
-                    p.pos.y,
-                    p.size * a.max(0.2),
-                    with_a(p.color, a),
-                );
+                draw_circle(p.pos.x, p.pos.y, p.size * a.max(0.2), with_a(p.color, a));
             }
         }
 
-        // ---- pemain (tidak di layar judul)
-        if self.state != State::Title {
+        // ---- pemain (hanya saat bermain)
+        if self.state == State::Play || self.state == State::Dead {
+            // bayangan proyeksi ke lapisan belakang: pemain terasa "di depan"
+            shadow_at(
+                &self.shadow_tex,
+                self.player.pos.x + 26.0,
+                self.player.pos.y + 40.0,
+                34.0,
+                15.0,
+                0.10,
+            );
             self.draw_player();
         }
 
         // ---- teks melayang
         for t in self.texts.iter() {
             let a = (t.life / t.max).clamp(0.0, 1.0);
-            draw_txt_c(&t.text, t.pos.x, t.pos.y + 2.5, t.size, with_a(INK, a * 0.20), &self.font_d);
-            draw_txt_c(&t.text, t.pos.x, t.pos.y, t.size, with_a(t.color, a), &self.font_d);
+            draw_txt_c(
+                &t.text,
+                t.pos.x,
+                t.pos.y + 2.5,
+                t.size,
+                with_a(INK, a * 0.20),
+                &self.font_d,
+            );
+            draw_txt_c(
+                &t.text,
+                t.pos.x,
+                t.pos.y,
+                t.size,
+                with_a(t.color, a),
+                &self.font_d,
+            );
+        }
+
+        // ============================================================ FOREGROUND
+        // Paling akhir, paling dekat. Memotong tepi atas layar = bingkai hidup.
+        if self.state == State::Play || self.state == State::Dead {
+            foreground_at(cam.x, cam.y, vw, vh, self.time, 0x2F1B_9C4D);
         }
     }
 
     fn draw_player(&mut self) {
-        let tc = if self.last_life > 0.0 { MUSTARD } else { VERMILION };
+        let tc = if self.last_life > 0.0 {
+            MUSTARD
+        } else {
+            VERMILION
+        };
 
         // ---- jejak syal: 3 nilai (bayangan, badan, kilau)
         let n = self.trail.len();
@@ -2078,7 +2697,12 @@ impl Game {
         // aura emas saat nyawa tinggal satu
         if self.last_life > 0.0 {
             let pulse = 0.5 + 0.5 * (self.time * 6.0).sin();
-            draw_circle(p.x, p.y, r + 13.0 + pulse * 5.0, with_a(MUSTARD, 0.09 + 0.06 * pulse));
+            draw_circle(
+                p.x,
+                p.y,
+                r + 13.0 + pulse * 5.0,
+                with_a(MUSTARD, 0.09 + 0.06 * pulse),
+            );
             draw_circle_lines(
                 p.x,
                 p.y,
@@ -2125,7 +2749,14 @@ impl Game {
         }
 
         // ---- bayangan kontak lembut (kanan-bawah, sesuai arah cahaya)
-        shadow_at(&self.shadow_tex, p.x + 4.0, p.y + 7.0, r * 1.95, r * 1.60, 0.24);
+        shadow_at(
+            &self.shadow_tex,
+            p.x + 4.0,
+            p.y + 7.0,
+            r * 1.95,
+            r * 1.60,
+            0.24,
+        );
 
         let blink = self.player.invuln > 0.0 && ((self.time * 16.0) as i32 % 2 == 0);
         let body = if blink { with_a(BODY, 0.45) } else { BODY };
@@ -2133,7 +2764,12 @@ impl Game {
         // ekstrusi → badan → bidang terang → rim light
         draw_circle(p.x + 1.8, p.y + 3.0, r, shade(body, 0.60));
         draw_circle(p.x, p.y, r, body);
-        draw_circle(p.x - r * 0.09, p.y - r * 0.11, r * 0.87, mix(body, PAPER, 0.15));
+        draw_circle(
+            p.x - r * 0.09,
+            p.y - r * 0.11,
+            r * 0.87,
+            mix(body, PAPER, 0.15),
+        );
         draw_circle(
             p.x - r * 0.26,
             p.y - r * 0.30,
@@ -2158,7 +2794,12 @@ impl Game {
         let ey = p.y + look.y * r * 0.34;
         draw_circle(ex + 1.0, ey + 1.6, r * 0.34, with_a(INK, 0.16));
         draw_circle(ex, ey, r * 0.30, PAPER);
-        draw_circle(ex + look.x * r * 0.10, ey + look.y * r * 0.10, r * 0.16, INK);
+        draw_circle(
+            ex + look.x * r * 0.10,
+            ey + look.y * r * 0.10,
+            r * 0.16,
+            INK,
+        );
         draw_circle(
             ex + look.x * r * 0.06 - r * 0.08,
             ey + look.y * r * 0.06 - r * 0.09,
@@ -2171,12 +2812,29 @@ impl Game {
         let ky = p.y - look.y * r * 0.92;
         draw_circle(kx + 1.2, ky + 2.0, r * 0.33, shade(tc, 0.62));
         draw_circle(kx, ky, r * 0.31, tc);
-        draw_circle(
-            kx - r * 0.10,
-            ky - r * 0.12,
-            r * 0.12,
-            mix(tc, PAPER, 0.48),
-        );
+        draw_circle(kx - r * 0.10, ky - r * 0.12, r * 0.12, mix(tc, PAPER, 0.48));
+
+        // ---- indikator lompat: dua titik. Penuh = siap dipakai.
+        if self.state == State::Play && self.player.attached.is_none() {
+            for k in 0..2u8 {
+                let on = k < self.air_jumps;
+                let x = p.x + (k as f32 - 0.5) * 13.0;
+                let y = p.y + r + 15.0;
+                draw_circle(x, y + 1.4, 3.6, with_a(INK, 0.12));
+                draw_circle(
+                    x,
+                    y,
+                    3.2,
+                    with_a(
+                        if on { MUSTARD } else { INK_SOFT },
+                        if on { 0.9 } else { 0.20 },
+                    ),
+                );
+                if on {
+                    draw_circle(x - 0.9, y - 0.9, 1.1, with_a(PAPER, 0.7));
+                }
+            }
+        }
     }
 
     fn draw_ui(&mut self, view: &View) {
@@ -2184,6 +2842,7 @@ impl Game {
         let vh = view.vh;
 
         match self.state {
+            State::Splash => self.draw_splash(view),
             State::Title => self.draw_title(view),
             State::Play => self.draw_hud(view),
             State::Dead => {
@@ -2214,6 +2873,184 @@ impl Game {
         }
         if self.bolt_flash > 0.0 {
             draw_rectangle(0.0, 0.0, vw, vh, with_a(MUSTARD, self.bolt_flash * 0.30));
+        }
+    }
+
+    fn draw_splash(&mut self, view: &View) {
+        let vw = view.vw;
+        let vh = view.vh;
+        let f = self.font_d.clone();
+        let fm = self.font_m.clone();
+        let t = self.splash_t;
+
+        // ---- tirai tinta: diorama masih terlihat samar di belakang
+        let curtain = ease_out_cubic((t / 0.32).clamp(0.0, 1.0));
+        for i in 0..18 {
+            let k = i as f32 / 17.0;
+            let c = mix(shade(INK, 0.86), INK, k);
+            draw_rectangle(0.0, k * vh, vw, vh / 17.0 + 2.0, with_a(c, 0.985 * curtain));
+        }
+
+        // ---- garis-garis diagonal: tekstur poster bergerak pelan
+        let phase = (t * 26.0).rem_euclid(64.0);
+        let mut x = -vh + phase - 64.0;
+        while x < vw + 64.0 {
+            draw_line(x, vh, x + vh, 0.0, 1.6, with_a(VERMILION, 0.045 * curtain));
+            x += 64.0;
+        }
+
+        // ---- bingkai tipis + pita vermilion di atas
+        let frame = ease_out_cubic(((t - 0.10) / 0.45).clamp(0.0, 1.0));
+        if frame > 0.01 {
+            let ins = 22.0;
+            let len = 26.0 * frame;
+            let col = with_a(PAPER, 0.24 * frame);
+            for (cx, cy, sx, sy) in [
+                (ins, ins, 1.0f32, 1.0f32),
+                (vw - ins, ins, -1.0, 1.0),
+                (ins, vh - ins, 1.0, -1.0),
+                (vw - ins, vh - ins, -1.0, -1.0),
+            ] {
+                draw_line(cx, cy, cx + len * sx, cy, 1.4, col);
+                draw_line(cx, cy, cx, cy + len * sy, 1.4, col);
+            }
+            let bar = 92.0 * frame;
+            draw_rectangle(vw * 0.5 - bar * 0.5, ins + 10.0, bar, 4.0, VERMILION);
+        }
+
+        // ---- "by" kecil, sendiri, lalu nama besar
+        let by_p = ease_out_cubic(((t - 0.34) / 0.42).clamp(0.0, 1.0));
+        if by_p > 0.001 {
+            draw_txt_c(
+                "by",
+                vw * 0.5,
+                vh * 0.325 + (1.0 - by_p) * 12.0,
+                17.0,
+                with_a(PAPER, 0.52 * by_p),
+                &fm,
+            );
+        }
+
+        // ---- BAGUS: tiap huruf menghantam dari skala 2,4 → 1
+        let name = "BAGUS";
+        let size = 78.0;
+        let track = 3.0;
+        let chars: Vec<char> = name.chars().collect();
+        let widths: Vec<f32> = chars
+            .iter()
+            .map(|c| text_w(&c.to_string(), &f, size))
+            .collect();
+        let total: f32 = widths.iter().sum::<f32>() + track * (chars.len() - 1) as f32;
+        let mut cx = vw * 0.5 - total * 0.5;
+        let cy = vh * 0.415;
+        for (i, c) in chars.iter().enumerate() {
+            let p = ((t - 0.44 - i as f32 * 0.075) / 0.40).clamp(0.0, 1.0);
+            if p > 0.001 {
+                let e = ease_out_cubic(p);
+                // overshoot kecil di akhir: terasa "membal" seperti stempel
+                let pop = 1.0 + (1.0 - e) * 1.55;
+                let rot = (1.0 - e) * if i % 2 == 0 { -0.42 } else { 0.42 };
+                let ch = c.to_string();
+                let gx = cx + widths[i] * 0.5;
+                draw_glyph(
+                    &ch,
+                    gx + 2.2,
+                    cy + (1.0 - e) * 46.0 + 3.0,
+                    size,
+                    pop,
+                    rot,
+                    with_a(shade(VERMILION, 0.45), e),
+                    &f,
+                );
+                draw_glyph(
+                    &ch,
+                    gx,
+                    cy + (1.0 - e) * 46.0,
+                    size,
+                    pop,
+                    rot,
+                    with_a(PAPER, e),
+                    &f,
+                );
+            }
+            cx += widths[i] + track;
+        }
+
+        // ---- garis: menggambar dari tengah ke luar
+        let rp = ease_out_cubic(((t - 0.94) / 0.50).clamp(0.0, 1.0));
+        if rp > 0.01 {
+            let w = 232.0 * rp;
+            let y = cy + 42.0;
+            draw_rectangle(vw * 0.5 - w * 0.5, y, w, 2.0, with_a(PAPER, 0.30));
+            draw_rectangle(vw * 0.5 - 7.0, y - 3.0, 14.0, 8.0, with_a(VERMILION, rp));
+        }
+
+        // ---- GosGilA: huruf meluncur naik satu per satu
+        let handle = "GosGilA";
+        let hs = 32.0;
+        let htrack = 7.0;
+        let hchars: Vec<char> = handle.chars().collect();
+        let hw: Vec<f32> = hchars
+            .iter()
+            .map(|c| text_w(&c.to_string(), &f, hs))
+            .collect();
+        let htotal: f32 = hw.iter().sum::<f32>() + htrack * (hchars.len() - 1) as f32;
+        let mut hx = vw * 0.5 - htotal * 0.5;
+        let hy = cy + 82.0;
+        for (i, c) in hchars.iter().enumerate() {
+            let p = ease_out_cubic(((t - 1.06 - i as f32 * 0.045) / 0.42).clamp(0.0, 1.0));
+            let ch = c.to_string();
+            draw_txt(
+                &ch,
+                hx,
+                hy + (1.0 - p) * 26.0 + 2.0,
+                hs,
+                with_a(shade(VERMILION, 0.4), p * 0.8),
+                &f,
+            );
+            draw_txt(&ch, hx, hy + (1.0 - p) * 26.0, hs, with_a(VERMILION, p), &f);
+            hx += hw[i] + htrack;
+        }
+
+        // ---- identitas game kecil di bawah
+        let gp = ease_out_cubic(((t - 1.52) / 0.55).clamp(0.0, 1.0));
+        if gp > 0.001 {
+            draw_txt_c(
+                "AYUN",
+                vw * 0.5,
+                vh * 0.700 + (1.0 - gp) * 10.0,
+                15.0,
+                with_a(PAPER, 0.34 * gp),
+                &fm,
+            );
+            draw_txt_c(
+                "satu jempol. jangan jatuh.",
+                vw * 0.5,
+                vh * 0.740 + (1.0 - gp) * 10.0,
+                15.0,
+                with_a(PAPER, 0.62 * gp),
+                &fm,
+            );
+        }
+
+        // ---- ajakan lewati
+        let tp = ease_out_cubic(((t - 1.85) / 0.5).clamp(0.0, 1.0));
+        if tp > 0.001 {
+            let blink = 0.55 + 0.45 * (t * 3.2).sin();
+            draw_txt_c(
+                "TAP UNTUK LANJUT",
+                vw * 0.5,
+                vh * 0.905,
+                12.0,
+                with_a(PAPER, 0.42 * tp * blink),
+                &fm,
+            );
+        }
+
+        // ---- tutup ke kertas sebelum masuk menu (bukan cut kasar)
+        if t > 2.90 {
+            let k = ((t - 2.90) / 0.25).clamp(0.0, 1.0);
+            draw_rectangle(0.0, 0.0, vw, vh, with_a(PAPER, ease_out_cubic(k)));
         }
     }
 
@@ -2302,7 +3139,14 @@ impl Game {
                 let p = ease_out_cubic(((tt - 0.10 - i as f32 * 0.075) / 0.55).clamp(0.0, 1.0));
                 if p > 0.001 {
                     let s = letters[i].to_string();
-                    draw_txt(&s, x, wm_y + (1.0 - p) * 54.0 + dy, size, with_a(col, p), &f);
+                    draw_txt(
+                        &s,
+                        x,
+                        wm_y + (1.0 - p) * 54.0 + dy,
+                        size,
+                        with_a(col, p),
+                        &f,
+                    );
                 }
                 x += widths[i] + track;
             }
@@ -2370,9 +3214,9 @@ impl Game {
         // ---- cara main
         let y0 = vh * 0.615;
         let rows = [
-            "TAHAN  =  AYUN",
+            "TAHAN  =  TANGKAP & AYUN",
             "LEPAS  =  TERBANG",
-            "KUNANG = SKOR   •   PETIR = NYAWA",
+            "TAP    =  LOMPAT  •  2 TAP = DOBEL",
         ];
         for (i, line) in rows.iter().enumerate() {
             let p = ease_out_cubic(((tt - 1.0 - i as f32 * 0.09) / 0.55).clamp(0.0, 1.0));
@@ -2399,7 +3243,7 @@ impl Game {
         // ---- credit: by Bagus / GosGilA — stagger per huruf
         let cp = ease_out_cubic(((tt - 1.30) / 0.9).clamp(0.0, 1.0));
         if cp > 0.001 {
-            let cy = vh * 0.775 + (1.0 - cp) * 16.0;
+            let cy = vh * 0.760 + (1.0 - cp) * 16.0;
             let lw = 84.0 * ease_out_cubic(((tt - 1.30) / 0.55).clamp(0.0, 1.0));
             draw_rectangle(
                 vw * 0.5 - lw * 0.5,
@@ -2458,9 +3302,28 @@ impl Game {
             );
             draw_circle_lines(pivot.x, pivot.y, 7.0, 2.4, with_a(INK, 0.42 * op));
             draw_circle(pivot.x, pivot.y, 3.0, with_a(INK, 0.30 * op));
-            draw_line(pivot.x + 1.5, pivot.y + 2.0, bob2.x + 1.5, bob2.y + 2.0, 2.0, with_a(INK, 0.14 * op));
-            draw_line(pivot.x, pivot.y, bob2.x, bob2.y, 1.8, with_a(INK, 0.34 * op));
-            draw_circle(bob2.x + 1.2, bob2.y + 2.0, 9.0, with_a(shade(INK, 0.5), 0.5 * op));
+            draw_line(
+                pivot.x + 1.5,
+                pivot.y + 2.0,
+                bob2.x + 1.5,
+                bob2.y + 2.0,
+                2.0,
+                with_a(INK, 0.14 * op),
+            );
+            draw_line(
+                pivot.x,
+                pivot.y,
+                bob2.x,
+                bob2.y,
+                1.8,
+                with_a(INK, 0.34 * op),
+            );
+            draw_circle(
+                bob2.x + 1.2,
+                bob2.y + 2.0,
+                9.0,
+                with_a(shade(INK, 0.5), 0.5 * op),
+            );
             draw_circle(bob2.x, bob2.y, 9.0, with_a(INK, 0.52 * op));
             draw_circle(bob2.x - 2.4, bob2.y - 2.6, 3.2, with_a(PAPER, 0.45 * op));
         }
@@ -2518,7 +3381,14 @@ impl Game {
         let rad = h * 0.5;
 
         // bayangan lembut
-        shadow_at(&self.shadow_tex, cx + 2.0, y + h + 10.0, w * 0.62, 14.0, 0.22);
+        shadow_at(
+            &self.shadow_tex,
+            cx + 2.0,
+            y + h + 10.0,
+            w * 0.62,
+            14.0,
+            0.22,
+        );
         // alas gelap = ekstrusi
         draw_round_rect(x, y + 6.0, w, h, rad, shade(VERMILION, 0.58));
         // badan
@@ -2566,7 +3436,14 @@ impl Game {
         let sw = text_w(&s, &f, 34.0 * pop);
         let pw = (sw + 44.0).max(106.0);
         pill_card(18.0, y0, pw, 70.0, 24.0, ui);
-        draw_txt("SKOR", 34.0, y0 + 25.0, 11.0, with_a(INK_SOFT, 0.9 * ui), &fm);
+        draw_txt(
+            "SKOR",
+            34.0,
+            y0 + 25.0,
+            11.0,
+            with_a(INK_SOFT, 0.9 * ui),
+            &fm,
+        );
         draw_txt(
             &s,
             34.0,
@@ -2597,7 +3474,14 @@ impl Game {
         // ---- terbaik
         let b = format!("TERBAIK {}", self.best as i32);
         let bw = text_w(&b, &fm, 12.0);
-        draw_txt(&b, vw - 22.0 - bw, y0 + 60.0, 12.0, with_a(INK_SOFT, 0.72 * ui), &fm);
+        draw_txt(
+            &b,
+            vw - 22.0 - bw,
+            y0 + 60.0,
+            12.0,
+            with_a(INK_SOFT, 0.72 * ui),
+            &fm,
+        );
 
         // ---- kombo
         if self.mult() > 1 {
@@ -2625,16 +3509,7 @@ impl Game {
                 16.0,
                 shade(cc, 0.58),
             );
-            draw_round_rect_border(
-                ccx - lw * 0.5,
-                ccy - chh * 0.5,
-                lw,
-                chh,
-                16.0,
-                1.8,
-                INK,
-                cc,
-            );
+            draw_round_rect_border(ccx - lw * 0.5, ccy - chh * 0.5, lw, chh, 16.0, 1.8, INK, cc);
             draw_round_rect(
                 ccx - lw * 0.5 + 5.0,
                 ccy - chh * 0.5 + 3.0,
@@ -2661,9 +3536,11 @@ impl Game {
         if self.tutorial > 0.0 {
             let a = (self.tutorial / 1.2).clamp(0.0, 1.0) * 0.95;
             let hint = if self.player.attached.is_some() {
-                "LEPAS untuk terbang"
+                "TAP = LOMPAT  •  TAHAN = AYUN"
+            } else if self.air_jumps > 0 {
+                "TAP = LOMPAT  •  TAHAN = TANGKAP"
             } else {
-                "TAHAN untuk ayun"
+                "TAHAN untuk menangkap jangkar"
             };
             let hw = text_w(hint, &fm, 16.0) + 42.0;
             let hx = vw * 0.5 - hw * 0.5;
@@ -2715,8 +3592,22 @@ impl Game {
         // kartu berlapis: bayangan lembut → alas gelap → badan → kilau
         let x0 = cx - cw * 0.5;
         let y0 = cy - ch * 0.5;
-        shadow_at(&self.shadow_tex, cx + 4.0, y0 + ch + 16.0, cw * 0.62, 26.0, 0.26 * e);
-        draw_round_rect(x0 + 3.0, y0 + 10.0, cw, ch, 24.0, with_a(shade(PAPER, 0.80), e));
+        shadow_at(
+            &self.shadow_tex,
+            cx + 4.0,
+            y0 + ch + 16.0,
+            cw * 0.62,
+            26.0,
+            0.26 * e,
+        );
+        draw_round_rect(
+            x0 + 3.0,
+            y0 + 10.0,
+            cw,
+            ch,
+            24.0,
+            with_a(shade(PAPER, 0.80), e),
+        );
         draw_round_rect_border(x0, y0, cw, ch, 24.0, 2.6, INK, PAPER);
         draw_round_rect(
             x0 + 8.0,
@@ -2727,7 +3618,14 @@ impl Game {
             with_a(PAPER_2, 0.65 * e),
         );
         // pita warna di kepala kartu
-        draw_round_rect(x0 + 2.0, y0 + 2.0, cw - 4.0, 46.0, 22.0, with_a(VERMILION, e));
+        draw_round_rect(
+            x0 + 2.0,
+            y0 + 2.0,
+            cw - 4.0,
+            46.0,
+            22.0,
+            with_a(VERMILION, e),
+        );
         draw_rectangle(x0 + 2.0, y0 + 26.0, cw - 4.0, 22.0, with_a(VERMILION, e));
         draw_round_rect(
             x0 + 12.0,
@@ -2739,7 +3637,11 @@ impl Game {
         );
 
         let top = y0;
-        let head = if self.death_reason == 0 { "JATUH" } else { "HABIS" };
+        let head = if self.death_reason == 0 {
+            "JATUH"
+        } else {
+            "HABIS"
+        };
         draw_txt_c(head, cx, top + 26.0, 30.0, with_a(PAPER, e), &f);
 
         let sub = if self.death_reason == 0 {
@@ -2754,7 +3656,14 @@ impl Game {
         // skor besar: 3 nilai
         draw_txt_c("SKOR", cx, top + 112.0, 13.0, with_a(INK_SOFT, 0.8), &fm);
         let score_txt = format!("{}", self.score as i32);
-        draw_txt_c(&score_txt, cx, top + 160.0, 54.0, with_a(shade(INK, 0.55), e), &f);
+        draw_txt_c(
+            &score_txt,
+            cx,
+            top + 160.0,
+            54.0,
+            with_a(shade(INK, 0.55), e),
+            &f,
+        );
         draw_txt_c(&score_txt, cx, top + 156.0, 54.0, with_a(PLUM, e), &f);
         draw_txt_c(&score_txt, cx, top + 152.0, 54.0, with_a(INK, e), &f);
 
@@ -2771,7 +3680,14 @@ impl Game {
         ];
         for (i, (k, v)) in rows.iter().enumerate() {
             let y = top + 200.0 + i as f32 * 28.0;
-            draw_round_rect(x0 + 24.0, y - 15.0, cw - 48.0, 24.0, 12.0, with_a(PAPER_2, 0.55 * e));
+            draw_round_rect(
+                x0 + 24.0,
+                y - 15.0,
+                cw - 48.0,
+                24.0,
+                12.0,
+                with_a(PAPER_2, 0.55 * e),
+            );
             draw_txt(k, cx - 106.0, y, 14.0, with_a(INK_SOFT, 0.9), &fm);
             let vw_ = text_w(v, &fm, 14.0);
             draw_txt(v, cx + 106.0 - vw_, y, 14.0, INK, &fm);
@@ -2846,6 +3762,7 @@ async fn main() {
         game.draw(&view);
         unsafe {
             FRAMES = FRAMES.wrapping_add(1);
+            DEBUG_GAME = Some(&game as *const Game);
         }
         next_frame().await;
     }
