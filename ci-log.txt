@@ -1,0 +1,88 @@
+build exit=101
+===== ERROR / PANIC =====
+55:error[E0308]: mismatched types
+61:     = note: expected enum `Option<f32>`
+68:error[E0277]: the trait bound `u32: Neg` is not satisfied
+81:error: could not compile `ayun` (bin "ayun") due to 2 previous errors
+===== TAIL 250 =====
+    Updating crates.io index
+     Locking 37 packages to latest compatible versions
+ Downloading crates ...
+  Downloaded color_quant v1.1.0
+  Downloaded fdeflate v0.3.7
+  Downloaded adler2 v2.0.1
+  Downloaded core_maths v0.1.1
+  Downloaded bytemuck v1.25.2
+  Downloaded macroquad_macro v0.1.8
+  Downloaded quad-rand v0.2.3
+  Downloaded simd-adler32 v0.3.10
+  Downloaded libm v0.2.16
+  Downloaded miniz_oxide v0.8.9
+  Downloaded miniz_oxide v0.9.1
+  Downloaded png v0.17.16
+  Downloaded fontdue v0.9.5
+  Downloaded ttf-parser v0.25.1
+  Downloaded miniquad v0.4.11
+  Downloaded ndk-sys v0.2.2
+  Downloaded glam v0.27.0
+  Downloaded macroquad v0.4.16
+  Downloaded image v0.24.9
+   Compiling simd-adler32 v0.3.10
+   Compiling libm v0.2.16
+   Compiling adler2 v2.0.1
+   Compiling crc32fast v1.5.6
+   Compiling autocfg v1.5.1
+   Compiling cfg-if v1.0.5
+   Compiling miniz_oxide v0.9.1
+   Compiling num-traits v0.2.19
+   Compiling libc v0.2.191
+   Compiling fdeflate v0.3.7
+   Compiling core_maths v0.1.1
+   Compiling flate2 v1.1.11
+   Compiling miniz_oxide v0.8.9
+   Compiling equivalent v1.0.3
+   Compiling allocator-api2 v0.2.21
+   Compiling miniquad v0.4.11
+   Compiling foldhash v0.1.5
+   Compiling bitflags v1.3.2
+   Compiling hashbrown v0.15.5
+   Compiling ttf-parser v0.25.1
+   Compiling png v0.17.16
+   Compiling color_quant v1.1.0
+   Compiling byteorder v1.5.0
+   Compiling bytemuck v1.25.2
+   Compiling ndk-sys v0.2.2
+   Compiling image v0.24.9
+   Compiling fontdue v0.9.5
+   Compiling glam v0.27.0
+   Compiling quad-rand v0.2.3
+   Compiling macroquad_macro v0.1.8
+   Compiling macroquad v0.4.16
+   Compiling ayun v0.1.0 (/home/runner/work/ayun/ayun)
+error[E0308]: mismatched types
+    --> src/__cargo_apk_main.tmp:2127:21
+     |
+2127 |             aspect: screen_width().max(1.0) / screen_height().max(1.0),
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<f32>`, found `f32`
+     |
+     = note: expected enum `Option<f32>`
+                found type `f32`
+help: try wrapping the expression in `Some`
+     |
+2127 |             aspect: Some(screen_width().max(1.0) / screen_height().max(1.0)),
+     |                     +++++                                                  +
+
+error[E0277]: the trait bound `u32: Neg` is not satisfied
+    --> src/__cargo_apk_main.tmp:2168:22
+     |
+2168 |             for k in -3..4 {
+     |                      ^^ the trait `Neg` is not implemented for `u32`
+     |
+help: consider specifying an integer type that can be negative
+     |
+2168 |             for k in -3i32..4 {
+     |                        +++
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `ayun` (bin "ayun") due to 2 previous errors
