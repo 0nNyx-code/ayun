@@ -2,9 +2,10 @@
 
 Game ayunan satu jempol. **Rust + macroquad** → Android (APK) & WebAssembly.
 
-> **TAHAN** = menangkap titik ayun terdekat di depan
-> **LEPAS** = terlempar, kecepatan dipertahankan
-> **KUNANG** = skor + kombo · **PETIR** = −1 nyawa · **JATUH** = tamat
+> **TAP** = lompat (×2 = double jump)
+> **TAHAN** = tangkap jangkar & ayun
+> **LEPAS** = terlempar / perfect release
+> **CHAIN** = ekspresi mastery · **BENANG** = skin permanen · **PETIR** = dari bawah
 
 by **Bagus / GosGilA**
 
@@ -12,9 +13,12 @@ by **Bagus / GosGilA**
 
 ## Tampilan
 
-Diorama 2.5D: tiap hue punya 3 anak tangga (light / mid / dark) dan palet itu
-sendiri yang jadi *lighting model*. Satu arah cahaya dari kiri-atas, bayangan
-kontak lembut, bentuk diekstrusi, langit berlapis parallax.
+**A Little World** — diorama **3D low-poly** asli (`Camera3D` + depth buffer),
+bukan 2.5D. Semua bentuk (kubus, bola, kerucut, cakram) dibangun dari kode,
+tanpa aset FBX/GLB. Satu arah cahaya, tiga nilai warna per hue (aturan
+Fancade), flat shading, haze berbasis kedalaman, foreground siluet.
+
+Detail rencana & riset: `00-ROMBAK-PLAN.md`.
 
 ## Build
 
@@ -40,7 +44,8 @@ python3 serve.py       # http://localhost:8099
 ## Struktur
 
 ```
-src/main.rs                 seluruh game (~2.8k baris, tanpa dependency selain macroquad)
+src/main.rs                 logika game, state, fisika, UI 2D
+src/world3d.rs              fondasi renderer low-poly (mesh + palet + helper)
 assets/                     font + 7 SFX (di-embed lewat include_bytes!)
 android-res/                ikon adaptif + warna
 .github/workflows/android.yml
