@@ -2124,7 +2124,7 @@ impl Game {
             target: vec3(cx, cy, 0.0),
             up: vec3(0.0, 1.0, 0.0),
             fovy: 50.0_f32.to_radians(),
-            aspect: screen_width().max(1.0) / screen_height().max(1.0),
+            aspect: Some(screen_width().max(1.0) / screen_height().max(1.0)),
             z_near: 0.1,
             z_far: 260.0,
             ..Default::default()
@@ -2165,7 +2165,7 @@ impl Game {
             let span = 7.0;
             let z = -11.0 - fi * 2.2;
             let drift = (t * (0.10 + fi * 0.05) + cam.x * W3 * (0.05 + fi * 0.05)).rem_euclid(span);
-            for k in -3..4 {
+            for k in -3i32..4 {
                 let kf = k as f32;
                 let h = hash01((k + 90) as u32 ^ (layer as u32) * 7919);
                 let x = cx + (kf * span + drift - span * 0.5) * (1.0 + fi * 0.15);
