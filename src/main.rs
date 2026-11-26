@@ -11,6 +11,9 @@
 use macroquad::audio::{load_sound_from_bytes, play_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 
+mod world3d;
+use world3d::*;
+
 // ---------------------------------------------------------------- palet ----
 // Aturan Fancade: tiap hue punya 3 anak tangga (light / mid / dark) dan
 // palet itu sendiri yang jadi lighting model. Satu arah cahaya, kiri-atas.
@@ -158,210 +161,19 @@ fn sky_gradient(left: f32, top: f32, vw: f32, vh: f32) {
 /// Bukit bulat berlapis: 4 pass (bayangan jatuh, dasar gelap, badan, highlight).
 /// Pass bayangan inilah yang membuat lapisan depan terlihat MELAYANG di atas
 /// lapisan belakang — depth cue paling murah yang ada.
-fn hill_layer(
-    cam_x: f32,
-    vw: f32,
-    base_y: f32,
-    parallax: f32,
-    col: Color,
-    seed: u32,
-    step: f32,
-    amp: f32,
-) {
-    let ox = cam_x * parallax;
-    let i0 = ((ox - vw * 0.62) / step).floor() as i64 - 1;
-    let i1 = ((ox + vw * 0.62) / step).ceil() as i64 + 1;
 
-    // ---- pass 0: bayangan lembut, digeser ke kanan-bawah
-    let mut i = i0;
-    while i <= i1 {
-        let h = hash01(i as u32 ^ seed.wrapping_mul(2654435761));
-        let r = step * (0.62 + 0.55 * h);
-        let x = i as f32 * step - ox;
-        let y = base_y + (1.0 - h) * amp;
-        draw_circle(x + 7.0, y + r * 0.34 + 11.0, r * 1.04, with_a(PLUM, 0.11));
-        i += 1;
-    }
-    i = i0;
-    while i <= i1 {
-        let h = hash01(i as u32 ^ seed.wrapping_mul(2654435761));
-        let r = step * (0.62 + 0.55 * h);
-        let x = i as f32 * step - ox;
-        let y = base_y + (1.0 - h) * amp;
-        draw_circle(x, y + r * 0.26, r, shade(col, 0.80));
-        i += 1;
-    }
-    i = i0;
-    while i <= i1 {
-        let h = hash01(i as u32 ^ seed.wrapping_mul(2654435761));
-        let r = step * (0.62 + 0.55 * h);
-        let x = i as f32 * step - ox;
-        let y = base_y + (1.0 - h) * amp;
-        draw_circle(x, y, r * 0.97, col);
-        i += 1;
-    }
-    i = i0;
-    while i <= i1 {
-        let h = hash01(i as u32 ^ seed.wrapping_mul(2654435761));
-        let r = step * (0.62 + 0.55 * h);
-        let x = i as f32 * step - ox;
-        let y = base_y + (1.0 - h) * amp;
-        draw_circle(x - r * 0.20, y - r * 0.22, r * 0.46, mix(col, PAPER, 0.22));
-        i += 1;
-    }
-}
 
 /// Foreground: lapisan paling dekat (parallax > 1). Digambar PALING AKHIR,
 /// jadi ia memotong semua yang ada di belakangnya. Ini depth cue yang bikin
 /// diorama terasa punya ruang — bukan gambar datar.
-fn foreground_at(cam_x: f32, cam_y: f32, vw: f32, vh: f32, t: f32, seed: u32) {
-    // Hijau tua, bukan abu-abu: siluet dedaunan tetap terasa bagian dari dunia.
-    let col = mix(shade(PLUM, 0.40), shade(HILL_NEAR, 0.34), 0.55);
-    let col2 = mix(shade(PLUM, 0.54), shade(HILL_NEAR, 0.46), 0.55);
-    let rim = mix(col2, PAPER, 0.16);
-    let top = cam_y - vh * 0.5 - 24.0;
 
-    // ---- sulur menggantung dari tepi atas
-    let ox = cam_x * 1.38;
-    let step = 216.0;
-    let i0 = ((ox - vw * 0.62) / step).floor() as i64 - 1;
-    let i1 = ((ox + vw * 0.62) / step).ceil() as i64 + 1;
-    let mut i = i0;
-    while i <= i1 {
-        let h = hash01(i as u32 ^ seed);
-        let h2 = hash01(i as u32 ^ seed ^ 0x9E37_79B9);
-        let x = i as f32 * step - ox;
-        let len = 30.0 + h * 96.0;
-        let sway = (t * 0.85 + h2 * 6.28).sin() * 10.0;
-        // batang tipis
-        draw_line(x, top, x + sway, top + len, 3.2, col);
-        // daun: tiga pasang kecil, makin ke ujung makin kecil
-        for k in 0..3 {
-            let kf = k as f32;
-            let f = 0.50 + kf * 0.18;
-            let lx = x + sway * f;
-            let ly = top + len * f;
-            let lr = (9.0 + h * 5.0) * (1.0 - kf * 0.16);
-            let side = if k % 2 == 0 { -1.0 } else { 1.0 };
-            draw_circle(lx + side * lr * 0.95, ly, lr, col);
-            draw_circle(lx + side * lr * 0.35, ly - lr * 0.20, lr * 0.72, col2);
-            draw_circle(
-                lx + side * lr * 0.55,
-                ly - lr * 0.42,
-                lr * 0.30,
-                with_a(rim, 0.55),
-            );
-        }
-        i += 1;
-    }
-
-    // ---- daun melayang paling depan: kecil, gelap, cepat
-    for k in 0..4 {
-        let kf = k as f32;
-        let span = vw + 420.0;
-        let lx = -210.0 + (t * (46.0 + kf * 15.0) + kf * 181.0 + cam_x * 1.62).rem_euclid(span);
-        let ly = cam_y - vh * 0.5 + vh * (0.16 + kf * 0.20) + (t * 0.75 + kf * 2.1).sin() * 20.0;
-        let tilt = (t * 0.9 + kf * 1.7).sin() * 0.55;
-        let s = 5.0 + kf * 1.2;
-        let c = tilt.cos();
-        let sn = tilt.sin();
-        let tip = vec2(lx + s * 3.2 * c, ly + s * 3.2 * sn);
-        draw_line(lx, ly, tip.x, tip.y, 1.2, with_a(col, 0.50));
-        draw_circle(lx, ly, s * 0.9, col);
-        draw_circle(lx + s * 0.85 * c, ly + s * 0.85 * sn, s * 0.62, col2);
-    }
-}
 
 /// Pulau melayang: batu trapesium + rumput 3 nilai + pohon kecil.
 /// Ini yang bikin langit terasa punya KEDALAMAN, bukan wallpaper.
-fn island_at(x: f32, y: f32, w: f32, h: f32, seed: u32, haze: f32) {
-    let hw = w * 0.5;
-    let bot = vec2(x + (hash01(seed) - 0.5) * w * 0.16, y + h);
-    // Haze atmosferik: makin jauh makin ditarik ke warna langit bawah.
-    // Tanpa ini pulau solid di tengah layar kebaca sebagai pijakan, bukan latar.
-    let rock = mix(mix(PLUM, PAPER_3, 0.42), SKY_BOT, haze);
-    let grass = mix(HILL_MID, SKY_BOT, haze * 0.82);
-    let tree = mix(HILL_NEAR, SKY_BOT, haze * 0.70);
 
-    // badan batu
-    draw_triangle(vec2(x - hw, y), vec2(x + hw, y), bot, rock);
-    // sisi kanan gelap
-    draw_triangle(
-        vec2(x + hw, y),
-        bot,
-        vec2(x + hw * 0.12, y + h * 0.62),
-        shade(rock, 0.86),
-    );
-    // lapisan terang kiri
-    draw_triangle(
-        vec2(x - hw, y),
-        vec2(x - hw * 0.12, y + h * 0.42),
-        bot,
-        mix(rock, PAPER, 0.14),
-    );
-    // garis retak tipis
-    draw_line(
-        x - hw * 0.30,
-        y + h * 0.18,
-        x + hw * 0.05,
-        y + h * 0.55,
-        1.4,
-        with_a(INK, 0.08 * (1.0 - haze)),
-    );
-
-    // rumput: 3 nilai (gelap, badan, kilau)
-    draw_rectangle(x - hw - 4.0, y - 8.0, w + 8.0, 14.0, shade(grass, 0.86));
-    draw_rectangle(x - hw - 4.0, y - 13.0, w + 8.0, 10.0, grass);
-    draw_rectangle(
-        x - hw - 4.0,
-        y - 13.0,
-        w + 8.0,
-        3.5,
-        mix(grass, PAPER, 0.30),
-    );
-
-    // pohon kecil
-    let tx = x + (hash01(seed ^ 7) - 0.5) * w * 0.52;
-    draw_rectangle(
-        tx - 2.0,
-        y - 28.0,
-        4.0,
-        16.0,
-        shade(mix(PLUM, SKY_BOT, haze), 0.88),
-    );
-    draw_circle(tx + 1.0, y - 33.0, 11.0, shade(tree, 0.88));
-    draw_circle(tx, y - 34.0, 9.5, tree);
-    draw_circle(tx - 3.5, y - 37.5, 4.2, mix(tree, PAPER, 0.24));
-}
 
 /// Awan: 3-5 gumpalan, versi gelap digambar dulu sebagai alas bawah.
-fn cloud_at(x: f32, y: f32, s: f32, alpha: f32) {
-    let blobs = [
-        (-1.35f32, 0.18f32, 0.62f32),
-        (-0.55, -0.10, 0.86),
-        (0.35, -0.02, 0.74),
-        (1.20, 0.22, 0.54),
-    ];
-    for b in blobs.iter() {
-        draw_circle(
-            x + b.0 * s,
-            y + b.1 * s + s * 0.30,
-            b.2 * s,
-            with_a(CLOUD_SHADE, alpha),
-        );
-    }
-    for b in blobs.iter() {
-        draw_circle(x + b.0 * s, y + b.1 * s, b.2 * s, with_a(CLOUD, alpha));
-    }
-    for b in blobs.iter() {
-        draw_circle(
-            x + b.0 * s - b.2 * s * 0.22,
-            y + b.1 * s - b.2 * s * 0.26,
-            b.2 * s * 0.42,
-            with_a(PAPER, alpha * 0.55),
-        );
-    }
-}
+
 
 fn ease_out_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -796,6 +608,11 @@ pub extern "C" fn ayun_debug(i: u32) -> f32 {
             16 => g.time,
             17 => JUMP_COUNT as f32,
             18 => g.pump,
+            19 => g.chain as f32,
+            20 => g.threads as f32,
+            21 => g.style,
+            22 => g.skin as f32,
+            23 => g.near_miss,
             _ => -1.0,
         }
     }
@@ -973,6 +790,29 @@ struct Game {
     grab_bonus: f32,
     /// Tekstur radial 64x64, dipakai ulang untuk SEMUA bayangan kontak.
     shadow_tex: Texture2D,
+    /// Mesh low-poly yang dipakai ulang (dibangun sekali saat startup).
+    meshes: MeshBook,
+    /// Chain perfect-release. Hilang setelah 1,6 detik idle.
+    chain: u32,
+    chain_t: f32,
+    /// Skor gaya (mastery expression), terpisah dari jarak.
+    style: f32,
+    /// Mata uang meta-progresi — tiap run tetap dapat.
+    threads: u32,
+    /// Benang yang didapat run terakhir (dipakai layar mati).
+    last_threads: u32,
+    /// Skin yang dipakai & sudah dibuka (bitmask).
+    skin: u8,
+    unlocked: u8,
+    /// Seed harian untuk "Ayunan Hari Ini".
+    daily_seed: u32,
+    /// Timer efek near-miss "SO CLOSE!".
+    near_miss: f32,
+    /// Jejak run terbaik untuk ghost.
+    ghost: Vec<Vec2>,
+    ghost_on: bool,
+    /// Animasi masuk: pemain sudah dalam ayunan sejak frame pertama.
+    intro: f32,
 }
 
 impl Game {
@@ -1062,6 +902,19 @@ impl Game {
             last_life: 0.0,
             grab_bonus: 0.0,
             shadow_tex: make_shadow_tex(),
+            meshes: MeshBook::build(),
+            chain: 0,
+            chain_t: 0.0,
+            style: 0.0,
+            threads: 0,
+            last_threads: 0,
+            skin: 0,
+            unlocked: 1,
+            daily_seed: (get_time() / 86400.0) as u32,
+            near_miss: 0.0,
+            ghost: Vec::new(),
+            ghost_on: false,
+            intro: 0.0,
         };
         g.seed_world(view);
         g
@@ -1131,6 +984,11 @@ impl Game {
         self.press_t = 0.0;
         self.tap = false;
         self.hold_done = false;
+        self.chain = 0;
+        self.chain_t = 0.0;
+        self.style = 0.0;
+        self.near_miss = 0.0;
+        self.intro = 0.0;
         self.player.invuln = 1.0;
         self.player.squash.set(1.0);
         self.score_pop.set(1.0);
@@ -1366,13 +1224,31 @@ impl Game {
         if sp > 520.0 && ang < 0.30 && held_long {
             self.perfect_release();
         } else {
-            self.hit_stop = 0.035;
-            Sfx::play(&self.sfx.pop, 0.35);
+            // Near-miss = hampir sukses. Otak membacanya sebagai menang,
+            // bukan kalah — jadikan momen singkat, lalu lanjut.
+            let near = sp > 360.0 && ang < 0.50 && held_long;
+            if near {
+                self.near_miss = 0.55;
+                self.slow = self.slow.max(0.10);
+                self.hit_stop = 0.07;
+                self.shake = self.shake.max(3.4);
+                self.style += 24.0;
+                haptic(8);
+                Sfx::play(&self.sfx.ping, 0.30);
+            } else {
+                self.hit_stop = 0.045;
+                Sfx::play(&self.sfx.pop, 0.35);
+            }
         }
     }
 
     fn perfect_release(&mut self) {
         let mult = self.mult() as f32;
+        // Chain = ekspresi mastery. Tidak menggantikan skor jarak.
+        self.chain += 1;
+        self.chain_t = 1.6;
+        let tier = self.chain;
+        self.style += 55.0 * mult * (1.0 + (tier.min(8) as f32) * 0.25);
         let gain = 220.0 * mult;
         self.add_score(gain);
         self.combo += 2;
@@ -1380,11 +1256,17 @@ impl Game {
         self.combo_max = self.combo_max.max(self.combo);
         self.combo_pop.bump(7.0);
         self.slow = 0.13;
-        self.hit_stop = 0.055;
-        self.shake = self.shake.max(7.0);
-        self.flash = 0.35;
-        haptic(14);
-        Sfx::play(&self.sfx.perfect, 0.5);
+        self.hit_stop = 0.070;
+        // Shake hanya di tier tinggi, supaya tetap terasa langka.
+        if tier >= 3 {
+            self.shake = self.shake.max(6.0 + tier.min(6) as f32 * 1.6);
+        }
+        self.flash = (0.25 + tier.min(6) as f32 * 0.035).min(0.48);
+        haptic(10 + tier.min(6) as i32 * 2);
+        Sfx::play(
+            if tier >= 3 { &self.sfx.combo } else { &self.sfx.perfect },
+            (0.42 + tier.min(6) as f32 * 0.04).min(0.72),
+        );
         self.rings.push(Ring {
             pos: self.player.pos,
             life: 0.34,
@@ -1399,11 +1281,18 @@ impl Game {
             vel: vec2(0.0, -46.0),
             life: 0.9,
             max: 0.9,
-            text: "PAS!".to_string(),
-            color: VERMILION,
-            size: 34.0,
+            text: if tier >= 5 {
+                format!("FLOW ×{}", tier)
+            } else if tier >= 3 {
+                "PAS! PAS!".to_string()
+            } else {
+                "PAS!".to_string()
+            },
+            color: if tier >= 5 { MUSTARD } else { VERMILION },
+            size: 34.0 + tier.min(6) as f32 * 2.0,
         });
-        for _ in 0..24 {
+        let pcnt = (16 + tier.min(8) as usize * 5).min(56);
+        for _ in 0..pcnt {
             let ang = self.rng.range(0.0, 6.28);
             let sp = self.rng.range(80.0, 320.0);
             self.parts.push(Particle {
@@ -1610,6 +1499,18 @@ impl Game {
         self.input_lock = (self.input_lock - dt).max(0.0);
         self.jump_buf = (self.jump_buf - dt).max(0.0);
         self.coyote = (self.coyote - dt).max(0.0);
+        self.near_miss = (self.near_miss - dt).max(0.0);
+        self.intro = (self.intro - dt).max(0.0);
+        if self.chain_t > 0.0 {
+            self.chain_t = (self.chain_t - dt).max(0.0);
+            if self.chain_t <= 0.0 {
+                self.chain = 0;
+            }
+        }
+        let today = (get_time() / 86400.0) as u32;
+        if today != self.daily_seed {
+            self.daily_seed = today;
+        }
 
         // JS bisa mengisi rekor kapan saja setelah wasm hidup.
         let bridged = unsafe { BEST_BRIDGE };
@@ -1657,11 +1558,22 @@ impl Game {
             State::Title => {
                 self.start_btn.target = 1.0;
                 if self.press && self.input_lock <= 0.0 {
-                    self.ui_in.bump(6.0);
-                    Sfx::play(&self.sfx.ui, 0.5);
-                    self.start_btn.bump(-5.0);
-                    self.reset_run(view);
-                    self.input_lock = INPUT_LOCK;
+                    // Skin cycle: ketuk area bawah kartu kredit.
+                    if self.pointer.y > view.vh * 0.83 && self.unlocked > 1 {
+                        for _ in 0..4 {
+                            self.skin = (self.skin + 1) % 4;
+                            if self.unlocked & (1 << self.skin) != 0 {
+                                break;
+                            }
+                        }
+                        Sfx::play(&self.sfx.ping, 0.42);
+                    } else {
+                        self.ui_in.bump(6.0);
+                        Sfx::play(&self.sfx.ui, 0.5);
+                        self.start_btn.bump(-5.0);
+                        self.reset_run(view);
+                        self.input_lock = INPUT_LOCK;
+                    }
                 }
                 self.cam = smooth_v(self.cam, self.cam + vec2(26.0, 0.0), 0.35, dt);
             }
@@ -1669,10 +1581,12 @@ impl Game {
             State::Dead => {
                 self.dead_t += dt;
                 self.again_btn.target = 1.0;
-                if self.dead_t > 0.55 && self.press && self.input_lock <= 0.0 {
+                // Restart instan = mekanik retensi, bukan kenyamanan.
+                if self.dead_t > 0.18 && self.press && self.input_lock <= 0.0 {
                     self.again_btn.bump(-5.0);
                     Sfx::play(&self.sfx.ui, 0.5);
                     self.reset_run(view);
+                    self.intro = 0.45;
                     self.input_lock = INPUT_LOCK;
                 }
             }
@@ -2082,6 +1996,30 @@ impl Game {
                 BEST_BRIDGE = self.best;
             }
         }
+        // Meta-progresi: TIDAK ada run yang sia-sia, termasuk run 2 detik.
+        let gained = (3 + (self.score / 120.0) as u32 + self.chain.min(6)).min(28);
+        self.last_threads = gained;
+        self.threads = self.threads.saturating_add(gained);
+        if self.threads >= 40 {
+            self.unlocked |= 1 << 1;
+        }
+        if self.threads >= 110 {
+            self.unlocked |= 1 << 2;
+        }
+        if self.threads >= 240 {
+            self.unlocked |= 1 << 3;
+        }
+        if self.unlocked > 1 {
+            self.texts.push(FloatText {
+                pos: self.player.pos + vec2(0.0, -54.0),
+                vel: vec2(0.0, -30.0),
+                life: 1.2,
+                max: 1.2,
+                text: format!("+{} BENANG", gained),
+                color: MUSTARD,
+                size: 22.0,
+            });
+        }
         for _ in 0..26 {
             let ang = self.rng.range(0.0, 6.28);
             let sp = self.rng.range(60.0, 340.0);
@@ -2149,8 +2087,6 @@ impl Game {
 
     // ----------------------------------------------------------------- draw ----
     fn draw(&mut self, view: &View) {
-        clear_background(PAPER);
-
         // kamera dunia dengan getaran
         let s = self.shake;
         let off = if s > 0.01 {
@@ -2160,682 +2096,422 @@ impl Game {
             Vec2::ZERO
         };
         let cam = self.cam + off;
-        // Dolly punch: makin cepat makin sempit sudut pandangnya.
-        // Ini yang bikin kecepatan terasa "maju", bukan cuma garis-garis.
-        let spd = self.player.vel.length();
-        let punch = if self.state == State::Play {
-            1.0 + ((spd - 540.0) / 1750.0).clamp(0.0, 0.15)
-        } else {
-            1.0
-        };
-        let world_cam = Camera2D {
-            rotation: 0.0,
-            zoom: vec2(2.0 * punch / view.vw, 2.0 * punch / view.vh),
-            target: cam,
-            offset: Vec2::ZERO,
-            render_target: None,
-            viewport: None,
-        };
-        set_camera(&world_cam);
         self.draw_world(view, cam);
 
-        // UI
+        // UI (2D, depth mati)
         set_camera(&view.ui_cam());
         self.draw_ui(view);
-
         set_default_camera();
     }
 
     fn draw_world(&mut self, view: &View, cam: Vec2) {
         let vw = view.vw;
         let vh = view.vh;
-        let left = cam.x - vw * 0.5;
-        let top = cam.y - vh * 0.5;
-        let right = cam.x + vw * 0.5;
+        let t = self.time;
 
-        // ================================================================ LANGIT
-        sky_gradient(left, top, vw, vh);
+        // ---- LANGIT: latar kertas. Kamera 3D tidak clear background,
+        // jadi gradient ini tetap jadi backdrop di belakang semua mesh.
+        set_camera(&view.ui_cam());
+        clear_background(PALETTE[C_CREAM]);
+        sky_gradient(0.0, 0.0, vw, vh);
 
-        // ---- matahari: halo bertingkat, badan 3 nilai, sorot kiri-atas
-        let sun = vec2(left + vw * 0.76, top + vh * 0.15);
-        for i in 0..4 {
-            let t = i as f32;
-            draw_circle(
-                sun.x,
-                sun.y,
-                68.0 + t * 26.0,
-                with_a(MUSTARD, 0.055 - t * 0.011),
-            );
-        }
-        draw_circle(sun.x + 2.5, sun.y + 3.5, 62.0, shade(MUSTARD, 0.78));
-        draw_circle(sun.x, sun.y, 60.0, MUSTARD);
-        draw_circle(sun.x - 13.0, sun.y - 15.0, 31.0, mix(MUSTARD, PAPER, 0.42));
-        draw_circle(sun.x - 21.0, sun.y - 23.0, 15.0, mix(MUSTARD, PAPER, 0.72));
+        // ---- KAMERA 3D: sudut 3/4 ringan supaya permukaan pulau terlihat,
+        // tapi bidang main tetap sejajar layar (readability ayunan).
+        let cx = cam.x * W3;
+        let cy = -cam.y * W3;
+        let cam3 = Camera3D {
+            position: vec3(cx + 1.6, cy + 2.6, 19.0),
+            target: vec3(cx, cy, 0.0),
+            up: vec3(0.0, 1.0, 0.0),
+            fovy: 50.0_f32.to_radians(),
+            aspect: screen_width().max(1.0) / screen_height().max(1.0),
+            z_near: 0.1,
+            z_far: 260.0,
+            ..Default::default()
+        };
+        set_camera(&cam3);
 
-        // ---- sinar: 3 segitiga panjang, sangat tipis, ikut berdenyut
+        let m = &self.meshes;
+
+        // ===================================================== MATAHARI 3D ====
+        // Bola emas 3 nilai + tiga cincin halo (semua mesh, bukan sprite 2D).
+        let sun = vec3(
+            cx + vw * W3 * 0.26,
+            cy + vh * W3 * 0.36,
+            -18.0,
+        );
         for i in 0..3 {
-            let a0 = 2.02 + i as f32 * 0.44 + (self.time * 0.10).sin() * 0.05;
-            let spread = 0.075;
-            let len = vw * 1.15;
-            let p1 = sun + vec2(a0.cos(), a0.sin()) * 44.0;
-            let p2 = sun + vec2((a0 - spread).cos(), (a0 - spread).sin()) * len;
-            let p3 = sun + vec2((a0 + spread).cos(), (a0 + spread).sin()) * len;
-            draw_triangle(p1, p2, p3, with_a(MUSTARD, 0.040));
-        }
-
-        // ---- awan: 3 lapis parallax, makin dekat makin besar & pekat
-        let clouds: [(f32, i32, f32, f32, f32, f32); 3] = [
-            (0.06, 3, 40.0, 5.0, 0.50, 0.11),
-            (0.13, 3, 58.0, 8.0, 0.74, 0.21),
-            (0.22, 2, 82.0, 12.0, 0.96, 0.32),
-        ];
-        for (plx, cnt, sc, spd, alpha, yoff) in clouds {
-            for i in 0..cnt {
-                let fi = i as f32;
-                let span = vw + 460.0;
-                let drift = cam.x * plx + self.time * spd + fi * span / cnt as f32 * 1.618;
-                let x = left - 230.0 + drift.rem_euclid(span);
-                let y = top + vh * yoff + (self.time * 0.55 + fi * 2.1).sin() * 7.0;
-                cloud_at(x, y, sc, alpha);
-            }
-        }
-
-        // ---- pulau melayang: kedalaman paling murah yang ada
-        let isles: [(f32, f32, f32, f32, f32, u32, f32); 3] = [
-            (0.34, 0.28, 74.0, 54.0, 0.10, 11, 0.58),
-            (0.62, 0.40, 104.0, 76.0, 0.16, 29, 0.42),
-            (0.15, 0.46, 58.0, 42.0, 0.20, 53, 0.32),
-        ];
-        for (fx, fy, iw, ih, plx, sd, haze) in isles {
-            let span = vw + 700.0;
-            let drift = cam.x * plx + self.time * (3.0 + plx * 10.0) + fx * span;
-            let x = left - 350.0 + drift.rem_euclid(span);
-            let y = top + vh * fy + (self.time * 0.7 + sd as f32).sin() * 6.0;
-            island_at(x, y, iw, ih, sd, haze);
-        }
-
-        // ---- layang-layang: satu objek kecil, langit langsung terasa hidup
-        {
-            let kx = left + vw * 0.27 + (self.time * 0.35).sin() * 24.0;
-            let ky = top + vh * 0.25 + (self.time * 0.9).sin() * 11.0;
-            let tilt = (self.time * 0.7).sin() * 0.20;
-            let c = tilt.cos();
-            let sn = tilt.sin();
-            let s = 14.0;
-            let rot = |v: Vec2| vec2(kx + v.x * c - v.y * sn, ky + v.x * sn + v.y * c);
-
-            // ekor
-            for k in 0..8 {
-                let t = k as f32 / 8.0;
-                let tp = rot(vec2(
-                    -t * 34.0,
-                    s * 1.15 + t * 58.0 + (self.time * 3.0 + t * 5.5).sin() * 7.0 * t,
-                ));
-                draw_circle(tp.x, tp.y, 2.5 * (1.0 - t * 0.5), with_a(VERMILION, 0.55));
-            }
-
-            let p0 = rot(vec2(0.0, -s));
-            let p1 = rot(vec2(s * 0.72, 0.0));
-            let p2 = rot(vec2(0.0, s * 1.15));
-            let p3 = rot(vec2(-s * 0.72, 0.0));
-            draw_triangle(p0, p1, p3, mix(VERMILION, PAPER, 0.18));
-            draw_triangle(p3, p1, p2, shade(VERMILION, 0.74));
-            draw_line(p0.x, p0.y, p2.x, p2.y, 1.4, with_a(INK, 0.20));
-            draw_line(p1.x, p1.y, p3.x, p3.y, 1.4, with_a(INK, 0.20));
-        }
-
-        // ---- balon: naik pelan, 3 nilai + simpul
-        for i in 0..3 {
-            let fi = i as f32;
-            let span = vh + 460.0;
-            let rise = (self.time * (13.0 + fi * 4.5) + fi * 173.0).rem_euclid(span);
-            let bx = left + vw * (0.13 + fi * 0.30) + (self.time * 0.6 + fi * 1.9).sin() * 15.0;
-            let by = top + vh + 70.0 - rise;
-            let r = 14.0 + fi * 3.5;
-            let col = [VERMILION, TEAL, MUSTARD][i as usize];
-
-            let tx = bx + (self.time * 1.3 + fi * 2.2).sin() * 7.0;
-            draw_line(bx, by + r * 1.30, tx, by + r * 2.7, 1.4, with_a(INK, 0.22));
-
-            draw_circle(bx + 1.5, by + 2.5, r, shade(col, 0.76));
-            draw_circle(bx, by, r, col);
-            draw_circle(
-                bx - r * 0.22,
-                by - r * 0.24,
-                r * 0.50,
-                mix(col, PAPER, 0.38),
-            );
-            draw_circle(bx - r * 0.36, by - r * 0.40, r * 0.17, with_a(PAPER, 0.85));
-            draw_triangle(
-                vec2(bx - 3.2, by + r * 0.94),
-                vec2(bx + 3.2, by + r * 0.94),
-                vec2(bx, by + r * 1.26),
-                shade(col, 0.68),
+            let k = i as f32;
+            draw_at(
+                &m.ball[C_GOLD],
+                model(
+                    sun,
+                    vec3(1.05 + k * 0.42, 1.05 + k * 0.42, 0.3),
+                    0.0,
+                    0.0,
+                ),
             );
         }
+        draw_at(&m.ball[C_GOLD], model(sun + vec3(0.04, -0.05, 0.2), vec3(1.0, 1.0, 0.3), 0.0, 0.0));
+        draw_at(
+            &m.ball[C_CREAM],
+            model(sun + vec3(-0.22, 0.26, 0.42), vec3(0.48, 0.48, 0.2), 0.0, 0.0),
+        );
 
-        // ---- angin: garis tipis melaju, bikin udara terasa bergerak
-        for i in 0..6 {
-            let fi = i as f32;
-            let span = vw + 320.0;
-            let wx = left - 160.0 + (self.time * (62.0 + fi * 23.0) + fi * 137.0).rem_euclid(span);
-            let wy = top + vh * (0.30 + fi * 0.076) + (self.time * 1.1 + fi).sin() * 5.0;
-            let len = 26.0 + fi * 9.0;
-            let a = 0.05 + 0.05 * (self.time * 2.0 + fi).sin().abs();
-            draw_line(wx, wy, wx + len, wy - 3.0, 1.6, with_a(PAPER, a));
-        }
-
-        // ================================================================ BUKIT
-        // Kamera mengikuti pemain, jadi bukit dipatok relatif kamera (backdrop).
-        // Dijepit di atas jurang supaya tanah tidak "naik" menutupi lubang.
-        let hz = (cam.y + vh * 0.44).min(self.void_y - vh * 0.12);
-        hill_layer(cam.x, vw, hz, 0.10, HILL_FAR, 17, 200.0, 74.0);
-        hill_layer(cam.x, vw, hz + 130.0, 0.20, HILL_MID, 41, 222.0, 104.0);
-        hill_layer(cam.x, vw, hz + 250.0, 0.34, HILL_NEAR, 73, 250.0, 138.0);
-
-        // =============================================================== JURANG
-        // Bukan lapisan transparan: blok pekat yang benar-benar "turun".
-        let v0 = self.void_y;
-        let bottom = cam.y + vh * 0.5 + 60.0;
-        let lip = mix(HILL_NEAR, PLUM, 0.62);
-        if bottom > v0 {
-            let depth = bottom - v0;
-            let bands = 28;
-            for i in 0..bands {
-                let t = i as f32 / (bands - 1) as f32;
-                let c = if t < 0.28 {
-                    mix(lip, PLUM, t / 0.28)
-                } else {
-                    mix(PLUM, shade(PLUM, 0.28), (t - 0.28) / 0.72)
-                };
-                draw_rectangle(
-                    left,
-                    v0 + depth * i as f32 / bands as f32,
-                    vw,
-                    depth / bands as f32 + 2.0,
-                    c,
+        // ============================================================ AWAN ====
+        // Kubus/kumpulan bola low-poly di tiga kedalaman.
+        for layer in 0..3usize {
+            let fi = layer as f32;
+            let span = 7.0;
+            let z = -11.0 - fi * 2.2;
+            let drift = (t * (0.10 + fi * 0.05) + cam.x * W3 * (0.05 + fi * 0.05)).rem_euclid(span);
+            for k in -3..4 {
+                let kf = k as f32;
+                let h = hash01((k + 90) as u32 ^ (layer as u32) * 7919);
+                let x = cx + (kf * span + drift - span * 0.5) * (1.0 + fi * 0.15);
+                let y = cy + 3.0 + fi * 0.7 + h * 1.6 + (t * 0.3 + kf).sin() * 0.10;
+                let s = 0.55 + fi * 0.30 + h * 0.28;
+                let col = if layer == 2 { C_WHITE } else { C_CREAM };
+                let bob = vec3(x, y, z);
+                draw_at(&m.ball[col], model(bob, vec3(s, s * 0.42, s * 0.6), 0.0, 0.0));
+                draw_at(
+                    &m.ball[col],
+                    model(bob + vec3(-s * 0.55, -s * 0.12, 0.0), vec3(s * 0.66, s * 0.32, s * 0.5), 0.0, 0.0),
+                );
+                draw_at(
+                    &m.ball[col],
+                    model(bob + vec3(s * 0.58, -s * 0.16, 0.0), vec3(s * 0.60, s * 0.30, s * 0.5), 0.0, 0.0),
                 );
             }
         }
-        // bibir jurang: kilau tipis + rumpur bergoyang + garis bahaya
-        draw_rectangle(left, v0 - 6.0, vw, 7.0, mix(HILL_NEAR, PAPER, 0.34));
-        draw_rectangle(left, v0 + 1.0, vw, 4.0, shade(HILL_NEAR, 0.62));
-        let mut gx = left + 5.0;
-        while gx < right {
-            let wob = (gx * 0.11 + self.time * 0.8).sin();
-            draw_line(
-                gx,
-                v0 - 5.0,
-                gx + wob * 2.2,
-                v0 - 5.0 - 8.0 - wob * 2.5,
-                2.0,
-                mix(HILL_NEAR, PAPER, 0.14),
-            );
-            gx += 11.0;
-        }
-        let mut hx = left;
-        while hx < right {
-            draw_line(
-                hx,
-                v0 + 4.0,
-                hx + 12.0,
-                v0 + 4.0,
-                2.0,
-                with_a(VERMILION, 0.42),
-            );
-            hx += 24.0;
+
+        // ========================================================= BUKIT ======
+        // Tiga lapisan kerucut, makin dekat makin gelap & besar.
+        for (li, &col) in [C_SKY, C_MINT, C_MINT].iter().enumerate() {
+            let fi = li as f32;
+            let z = -8.0 + fi * 2.4;
+            let step = 3.4 - fi * 0.5;
+            let ox = cx * (0.20 + fi * 0.18);
+            let i0 = ((ox - 7.0) / step).floor() as i64 - 1;
+            let i1 = ((ox + 7.0) / step).ceil() as i64 + 1;
+            let mut i = i0;
+            while i <= i1 {
+                let h = hash01(i as u32 ^ (li as u32 + 31).wrapping_mul(2654435761));
+                let x = i as f32 * step - ox;
+                let hgt = 1.0 + h * 1.5 + fi * 0.3;
+                let base = cy - 3.2 - fi * 0.35;
+                let c = if li == 2 { shade(PALETTE[col], 0.90) } else { PALETTE[col] };
+                draw_at(
+                    &m.cone[if li == 0 { C_SKY } else { C_MINT }],
+                    model(vec3(x, base + hgt * 0.5, z), vec3(step * 1.15, hgt, step * 1.15), 0.0, 0.0),
+                );
+                if li == 2 && h > 0.62 {
+                    // bayangan jatuh ke lapisan belakang = depth cue
+                    draw_at(
+                        &m.cone[C_INK],
+                        model(vec3(x + 0.22, base + hgt * 0.5 - 0.18, z - 0.4), vec3(step * 1.1, hgt * 0.95, step * 1.1), 0.0, 0.0),
+                    );
+                }
+                let _ = c;
+                i += 1;
+            }
         }
 
-        // ============================================================== JANGKAR
-        let target = self.best_anchor();
+        // ====================================================== PULAU =========
+        // Pulau melayang: batu kerucut terbalik + rumput silinder + pohon.
+        for li in 0..3usize {
+            let fi = li as f32;
+            let step = 6.5 + fi * 2.2;
+            let ox = cx * (0.24 + fi * 0.14);
+            let i0 = ((ox - 8.0) / step).floor() as i64 - 1;
+            let i1 = ((ox + 8.0) / step).ceil() as i64 + 1;
+            let mut i = i0;
+            while i <= i1 {
+                let h = hash01(i as u32 ^ (li as u32 + 71).wrapping_mul(2246822519));
+                let x = i as f32 * step - ox + h * 1.5;
+                let y = cy + 1.6 + fi * 1.1 + h * 2.2 - (t * 0.20 + h * 6.28).sin() * 0.12;
+                let z = -3.6 - fi * 2.0;
+                let w = 0.95 + h * 0.85 + fi * 0.25;
+                // batu (kerucut terbalik)
+                let mut mm = Mat4::from_translation(vec3(x, y - w * 0.55, z));
+                mm = mm * Mat4::from_rotation_z(std::f32::consts::PI);
+                draw_at(&m.cone[C_SLATE], mm * Mat4::from_scale(vec3(w, w * 1.15, w)));
+                // rumput
+                draw_at(
+                    &m.disc[C_MINT],
+                    model(vec3(x, y, z), vec3(w * 2.0, w * 0.5, w * 2.0), 0.0, 0.0),
+                );
+                // pohon kecil + totem yang menoleh saat chain hidup
+                if h > 0.35 {
+                    draw_at(
+                        &m.cone[C_MINT],
+                        model(vec3(x + w * 0.45, y + w * 0.5, z), vec3(w * 0.55, w * 1.0, w * 0.55), 0.0, 0.0),
+                    );
+                }
+                if self.chain > 0 && li == 0 {
+                    let follow = (t * 0.6).sin() * 0.5;
+                    draw_at(
+                        &m.cone[C_PLUM],
+                        model(vec3(x - w * 0.45, y + w * 0.42, z), vec3(w * 0.26, w * 0.5, w * 0.26), follow, 0.0),
+                    );
+                    draw_orb(vec3(x - w * 0.45, y + w * 0.52, z + w * 0.14), w * 0.06, PALETTE[C_WHITE]);
+                }
+                i += 1;
+            }
+        }
+
+        // ========================================================= JANGKAR ====
+        let anchor_col = if self.chain >= 3 { C_GOLD } else { C_INK };
         for (i, a) in self.anchors.iter().enumerate() {
-            let is_target = Some(i) == target && self.state == State::Play;
-            let pulse = 1.0 + 0.06 * (self.time * 2.0 + a.phase).sin();
-            let r = a.r * if is_target { 1.12 * pulse } else { 1.0 };
-
-            // bayangan kontak lembut
-            shadow_at(
-                &self.shadow_tex,
-                a.pos.x + 6.0,
-                a.pos.y + 9.0,
-                r * 2.0,
-                r * 1.6,
-                0.20,
-            );
-
-            if is_target {
-                let hr = r * 2.9 * pulse;
-                draw_circle(a.pos.x, a.pos.y, hr, with_a(VERMILION, 0.09));
-                draw_circle(a.pos.x, a.pos.y, hr * 0.68, with_a(VERMILION, 0.08));
-                draw_circle_lines(a.pos.x, a.pos.y, hr * 0.90, 2.5, with_a(VERMILION, 0.52));
-            }
-
-            // Cakram KREM + stroke tinta + lubang teal.
-            // Versi teal-di-atas-bukit-hijau tadi tenggelam; krem selalu menang
-            // kontras di latar apa pun, dan lubang gelap bikin tali terlihat
-            // benar-benar masuk ke dalam benda.
-            draw_circle(a.pos.x + 2.4, a.pos.y + 3.4, r + 3.6, with_a(INK, 0.20));
-            draw_circle(a.pos.x, a.pos.y, r + 3.6, PAPER);
-            // bibir bawah: satu nada lebih gelap → terbaca sebagai piringan tebal
-            draw_circle(a.pos.x, a.pos.y + 1.8, r + 1.8, mix(PAPER_3, PAPER, 0.25));
-            draw_circle(a.pos.x, a.pos.y, r - 2.2, PAPER);
-            draw_circle_lines(a.pos.x, a.pos.y, r + 3.2, 2.6, INK);
-            // lubang tali
-            draw_circle(a.pos.x, a.pos.y, r - 4.0, shade(TEAL, 0.46));
-            draw_circle_lines(a.pos.x, a.pos.y, r - 4.0, 1.8, shade(TEAL, 0.26));
-            // kilau di dinding lubang (kiri-atas) → lubang terasa punya kedalaman
-            draw_circle(
-                a.pos.x - r * 0.20,
-                a.pos.y - r * 0.24,
-                r * 0.26,
-                with_a(mix(TEAL, PAPER, 0.55), 0.55),
-            );
-
-            // cincin "baru muncul"
-            if a.fresh > 0.0 {
-                draw_circle_lines(
-                    a.pos.x,
-                    a.pos.y,
-                    (r + 6.0) * (1.0 + (1.0 - a.fresh) * 1.6),
-                    2.0,
-                    with_a(TEAL, a.fresh * 0.5),
+            let p = p3(a.pos);
+            let rr = a.r * W3 * 2.6 * (1.0 + a.fresh * 0.14);
+            // rantai ke atas
+            for k in 0..5 {
+                draw_at(
+                    &m.cube[C_SLATE],
+                    model(p + vec3(0.0, 0.16 + k as f32 * 0.20, -0.04), vec3(0.055, 0.11, 0.055), (k % 2) as f32 * 0.7, 0.0),
                 );
             }
-        }
-
-        // ---- garis bantu ke target
-        if self.state == State::Play && self.player.attached.is_none() {
-            if let Some(i) = target {
-                let a = self.anchors[i].pos;
-                let p = self.player.pos;
-                let n = 12;
-                for k in 0..n {
-                    let t0 = k as f32 / n as f32;
-                    let t1 = t0 + 0.5 / n as f32;
-                    let q0 = p.lerp(a, t0);
-                    let q1 = p.lerp(a, t1);
-                    draw_line(q0.x, q0.y, q1.x, q1.y, 2.2, with_a(INK, 0.16));
+            // cakram utama
+            draw_at(&m.disc[anchor_col], model(p, vec3(rr, rr * 0.5, rr), 0.0, 0.0));
+            // lubang teal
+            draw_at(
+                &m.disc[C_BLUE],
+                model(p + vec3(0.0, 0.07, 0.0), vec3(rr * 0.42, rr * 0.2, rr * 0.42), 0.0, 0.0),
+            );
+            // UKIRAN: bekas tangan penambat — 3 goresan tipis.
+            // Hanya jelas saat `fresh` (baru dipakai) atau saat chain hidup.
+            let eg = (0.30 + a.fresh * 0.55 + self.chain.min(4) as f32 * 0.06).min(1.0);
+            if eg > 0.35 {
+                let ec = mix(PALETTE[C_CREAM], PALETTE[C_INK], eg);
+                for k in 0..3 {
+                    let ang = -0.5 + k as f32 * 0.5 + i as f32 * 0.13;
+                    let a0 = p + vec3(ang.cos() * rr * 0.18, 0.085, ang.sin() * rr * 0.18);
+                    let a1 = p + vec3(ang.cos() * rr * 0.42, 0.085, ang.sin() * rr * 0.42);
+                    draw_beam(a0, a1, 0.012, &m.cube[C_INK]);
+                    let _ = ec;
                 }
             }
         }
 
-        // ---- kunang-kunang
-        for f in self.flies.iter() {
-            if f.taken && f.pop > 0.9 {
-                continue;
+        // ============================================================ TALI ====
+        if let Some(ai) = self.player.attached {
+            if let Some(a) = self.anchors.get(ai) {
+                let a3 = p3(a.pos);
+                let b3 = p3(self.player.pos);
+                let rope_col = if self.pump > 0.25 { C_GOLD } else { C_SLATE };
+                let seg = 12usize;
+                for k in 0..seg {
+                    let k0 = k as f32 / seg as f32;
+                    let k1 = (k + 1) as f32 / seg as f32;
+                    let p0 = a3.lerp(b3, k0);
+                    let p1 = a3.lerp(b3, k1);
+                    // sedikit kendur di tengah, terasa seperti tali
+                    let sag = (k0 * std::f32::consts::PI).sin() * 0.035;
+                    draw_beam(
+                        p0 + vec3(0.0, -sag, 0.02),
+                        p1 + vec3(0.0, -((k1 * std::f32::consts::PI).sin() * 0.035), 0.02),
+                        0.018,
+                        &m.cube[rope_col],
+                    );
+                }
             }
-            let tw = 0.6 + 0.4 * (self.time * 4.0 + f.phase).sin();
-            let r = if f.golden { 6.5 } else { 4.5 } * (1.0 - f.pop * 0.8).max(0.0);
-            let col = if f.golden { PLUM } else { MUSTARD };
-            draw_circle(f.pos.x, f.pos.y, r * 3.6, with_a(col, 0.06 * tw));
-            draw_circle(f.pos.x, f.pos.y, r * 2.0, with_a(col, 0.13 * tw));
-            draw_circle(f.pos.x + 1.0, f.pos.y + 1.6, r, shade(col, 0.72));
-            draw_circle(f.pos.x, f.pos.y, r, col);
-            // rim gelap senada: mustard di atas bukit hijau tadinya lumer jadi
-            // satu titik pucat. Rim 1,2 px cukup buat memisahkan siluet.
-            draw_circle_lines(f.pos.x, f.pos.y, r, 1.2, with_a(shade(col, 0.38), 0.85));
-            draw_circle(
-                f.pos.x - r * 0.32,
-                f.pos.y - r * 0.34,
-                r * 0.36,
-                with_a(PAPER, 0.85),
-            );
         }
 
-        // ---- petir
+        // ===================================================== KUNANG ========
+        // Jejak timing: kunang menyala di busur yang benar, bukan acak.
+        for (i, a) in self.anchors.iter().enumerate() {
+            if i > 6 {
+                break;
+            }
+            let h = hash01(i as u32 ^ 0x5C1A_9E33);
+            let ang = -0.8 + h * 1.6 + (t * 0.9 + h * 6.28).sin() * 0.22;
+            let rr = a.r * W3 * 3.4;
+            let kp = p3(a.pos) + vec3(ang.sin() * rr, ang.cos() * rr, 0.25);
+            let pulse = 0.65 + 0.35 * (t * 4.0 + h * 9.0).sin();
+            let size = (0.035 + h * 0.02) * pulse;
+            draw_orb(kp, size, PALETTE[C_GOLD]);
+            draw_orb(kp + vec3(0.0, 0.0, 0.01), size * 0.45, PALETTE[C_WHITE]);
+        }
+
+        // =========================================================== PETIR ====
+        // Datang DARI BAWAH: lautan awan gelap menyambar jangkar.
         for b in self.bolts.iter() {
-            if !b.struck {
-                let p = (b.t / b.warn).clamp(0.0, 1.0);
-                let r = 62.0;
-                let a = 0.25 + 0.45 * (self.time * 12.0).sin().abs();
-                draw_circle(b.pos.x, b.pos.y, r, with_a(VERMILION, 0.06 + 0.10 * p));
-                draw_circle_lines(b.pos.x, b.pos.y, r, 2.5, with_a(VERMILION, a));
-                draw_circle_lines(
-                    b.pos.x,
-                    b.pos.y,
-                    r * (1.0 - p),
-                    2.0,
-                    with_a(VERMILION, 0.5 * (1.0 - p)),
+            let bx = b.pos.x * W3;
+            let by = -b.pos.y * W3;
+            if b.warn > 0.0 && !b.struck {
+                let g = 0.15 + 0.10 * (t * 18.0).sin();
+                draw_at(
+                    &m.ball[C_BLUE],
+                    model(vec3(bx, by - 3.4, -0.6), vec3(0.9, 0.35, 0.5), 0.0, 0.0),
                 );
-                draw_rectangle(
-                    b.pos.x - 2.2,
-                    b.pos.y - 21.0,
-                    4.4,
-                    18.0,
-                    with_a(VERMILION, 0.85),
-                );
-                draw_circle(b.pos.x, b.pos.y + 4.0, 2.6, with_a(VERMILION, 0.85));
-            } else {
-                let a = (b.life / 0.45).clamp(0.0, 1.0);
-                let mut y = b.pos.y - 320.0;
-                let mut x = b.pos.x;
-                let mut i = 0;
-                while y < b.pos.y {
-                    let nx = b.pos.x + ((i as f32 * 2.7).sin()) * 17.0;
-                    draw_line(
-                        x + 2.0,
-                        y + 2.0,
-                        nx + 2.0,
-                        y + 42.0,
-                        4.0,
-                        with_a(PLUM, a * 0.5),
-                    );
-                    draw_line(x, y, nx, y + 40.0, 3.0, with_a(MUSTARD, a));
-                    x = nx;
-                    y += 40.0;
-                    i += 1;
-                }
-                draw_circle(
-                    b.pos.x,
-                    b.pos.y,
-                    76.0 * (1.0 - a),
-                    with_a(MUSTARD, a * 0.22),
-                );
+                let _ = g;
+            }
+            if b.struck {
+                let top = vec3(bx, by, 0.15);
+                let bot = vec3(bx + 0.18, by - 3.2, -0.4);
+                draw_beam(bot, top, 0.030, &m.cube[C_WHITE]);
+                draw_beam(bot + vec3(-0.10, 0.0, 0.0), top, 0.012, &m.cube[C_GOLD]);
             }
         }
 
-        // ---- gelombang lingkaran
-        for r in self.rings.iter() {
-            let k = 1.0 - (r.life / r.max).clamp(0.0, 1.0);
-            let rr = r.r0 + (r.r1 - r.r0) * ease_out_cubic(k);
-            draw_circle_lines(
-                r.pos.x,
-                r.pos.y,
-                rr,
-                r.w * (1.0 - k * 0.55),
-                with_a(r.color, 1.0 - k),
+        // ========================================================== JEJAK ====
+        for tr in self.trail.iter() {
+            let a = (tr.life / 0.42).clamp(0.0, 1.0);
+            let s = (0.05 + a * 0.13) * W3 * 70.0;
+            draw_at(
+                &m.wedge[C_CORAL],
+                model(p3(tr.pos) + vec3(0.0, 0.0, 0.06), vec3(s, s * 0.7, s), 0.0, (t * 2.0).sin() * 0.2),
             );
         }
 
-        // ---- partikel
-        for p in self.parts.iter() {
-            let a = (p.life / p.max).clamp(0.0, 1.0);
-            if p.strip {
-                let d = p.vel.normalize_or_zero() * (p.size * 2.2);
-                draw_line(
-                    p.pos.x,
-                    p.pos.y,
-                    p.pos.x - d.x,
-                    p.pos.y - d.y,
-                    p.size * 0.8,
-                    with_a(p.color, a),
-                );
-            } else {
-                draw_circle(p.pos.x, p.pos.y, p.size * a.max(0.2), with_a(p.color, a));
-            }
-        }
-
-        // ---- pemain (hanya saat bermain)
+        // ========================================================== PEMAIN ===
         if self.state == State::Play || self.state == State::Dead {
-            // bayangan proyeksi ke lapisan belakang: pemain terasa "di depan"
-            shadow_at(
-                &self.shadow_tex,
-                self.player.pos.x + 26.0,
-                self.player.pos.y + 40.0,
-                34.0,
-                15.0,
-                0.10,
+            let p = p3(self.player.pos);
+            let r = self.player.r * W3;
+            let sq = self.player.squash.value;
+            let skin_col = match self.skin {
+                1 => C_GOLD,
+                2 => C_BLUE,
+                3 => C_MINT,
+                _ => C_CORAL,
+            };
+            let sc = if self.last_life > 0.0 { C_GOLD } else { skin_col };
+            // bayangan kontak di bidang belakang
+            draw_at(
+                &m.disc[C_SLATE],
+                model(p + vec3(0.18, -r * 0.9, -0.5), vec3(r * 2.0, r * 0.14, r * 1.3), 0.0, 0.0),
             );
-            self.draw_player();
-        }
-
-        // ---- teks melayang
-        for t in self.texts.iter() {
-            let a = (t.life / t.max).clamp(0.0, 1.0);
-            draw_txt_c(
-                &t.text,
-                t.pos.x,
-                t.pos.y + 2.5,
-                t.size,
-                with_a(INK, a * 0.20),
-                &self.font_d,
+            // badan bola 3 nilai + squash
+            draw_at(
+                &m.ball[sc],
+                model(p, vec3(r * 2.0 * sq, r * 2.0 / sq, r * 2.0), 0.0, 0.0),
             );
-            draw_txt_c(
-                &t.text,
-                t.pos.x,
-                t.pos.y,
-                t.size,
-                with_a(t.color, a),
-                &self.font_d,
-            );
-        }
-
-        // ============================================================ FOREGROUND
-        // Paling akhir, paling dekat. Memotong tepi atas layar = bingkai hidup.
-        if self.state == State::Play || self.state == State::Dead {
-            foreground_at(cam.x, cam.y, vw, vh, self.time, 0x2F1B_9C4D);
-        }
-    }
-
-    fn draw_player(&mut self) {
-        let tc = if self.last_life > 0.0 {
-            MUSTARD
-        } else {
-            VERMILION
-        };
-
-        // ---- jejak syal: 3 nilai (bayangan, badan, kilau)
-        let n = self.trail.len();
-        for i in 1..n {
-            let a = self.trail[i].pos;
-            let b = self.trail[i - 1].pos;
-            let t = i as f32 / n as f32;
-            let life = (self.trail[i].life / 0.42).clamp(0.0, 1.0);
-            let w = 10.0 * t * life + 1.2;
-            draw_line(
-                a.x + 1.6,
-                a.y + 2.6,
-                b.x + 1.6,
-                b.y + 2.6,
-                w,
-                with_a(shade(tc, 0.55), 0.26 * t * life),
-            );
-            draw_line(a.x, a.y, b.x, b.y, w, with_a(tc, 0.58 * t * life));
-            draw_line(
-                a.x - 0.8,
-                a.y - 1.2,
-                b.x - 0.8,
-                b.y - 1.2,
-                w * 0.42,
-                with_a(mix(tc, PAPER, 0.45), 0.32 * t * life),
-            );
-        }
-
-        // ---- tali: bayangan → badan → kilau
-        if let Some(i) = self.player.attached {
-            if i < self.anchors.len() {
-                let a = self.anchors[i].pos;
-                let p = self.player.pos;
-                let d = p - a;
-                let dist = d.length();
-                let slack = (self.player.rope - dist).max(0.0);
-                let seg = 10;
-                let mut pts = [Vec2::ZERO; 11];
-                for k in 0..=seg {
-                    let t = k as f32 / seg as f32;
-                    let mut q = a.lerp(p, t);
-                    q.y += (std::f32::consts::PI * t).sin() * slack * 0.28;
-                    pts[k] = q;
-                }
-                for k in 1..=seg {
-                    draw_line(
-                        pts[k - 1].x + 2.0,
-                        pts[k - 1].y + 3.0,
-                        pts[k].x + 2.0,
-                        pts[k].y + 3.0,
-                        2.6,
-                        with_a(INK, 0.16),
-                    );
-                }
-                for k in 1..=seg {
-                    draw_line(
-                        pts[k - 1].x,
-                        pts[k - 1].y,
-                        pts[k].x,
-                        pts[k].y,
-                        2.9,
-                        shade(BODY, 0.92),
-                    );
-                }
-                for k in 1..=seg {
-                    draw_line(
-                        pts[k - 1].x - 0.7,
-                        pts[k - 1].y - 0.9,
-                        pts[k].x - 0.7,
-                        pts[k].y - 0.9,
-                        1.0,
-                        with_a(PAPER, 0.32),
-                    );
-                }
-            }
-        }
-
-        let sq = self.player.squash.value.clamp(0.55, 1.7);
-        let r = self.player.r * sq;
-        let p = self.player.pos;
-
-        // aura emas saat nyawa tinggal satu
-        if self.last_life > 0.0 {
-            let pulse = 0.5 + 0.5 * (self.time * 6.0).sin();
-            draw_circle(
-                p.x,
-                p.y,
-                r + 13.0 + pulse * 5.0,
-                with_a(MUSTARD, 0.09 + 0.06 * pulse),
-            );
-            draw_circle_lines(
-                p.x,
-                p.y,
-                r + 7.0 + pulse * 3.0,
-                2.0,
-                with_a(MUSTARD, 0.35 + 0.25 * pulse),
-            );
-        }
-
-        // ---- indikator jendela "PAS": cincin mengisi saat ayunan siap dilepas
-        if self.player.attached.is_some() && self.state == State::Play {
-            let sp = self.player.vel.length();
-            let ang = self.player.vel.y.atan2(self.player.vel.x).abs();
-            let ready = sp > 520.0 && ang < 0.30;
-            let charge =
-                ((sp - 420.0) / 140.0).clamp(0.0, 1.0) * if ang < 0.50 { 1.0 } else { 0.25 };
-            let ring = r + 9.0;
-            if ready {
-                draw_circle_lines(p.x, p.y, ring + 1.6, 4.6, with_a(VERMILION, 0.28));
-                draw_circle_lines(p.x, p.y, ring, 3.0, VERMILION);
-                draw_circle(p.x - ring, p.y, 3.0, mix(VERMILION, PAPER, 0.55));
-                draw_circle(p.x + ring, p.y, 3.0, shade(VERMILION, 0.68));
-            } else {
-                draw_circle_lines(p.x, p.y, ring, 2.2, with_a(INK, 0.14 + 0.26 * charge));
-                if charge > 0.30 {
-                    draw_circle_lines(p.x, p.y, ring, 2.6, with_a(MUSTARD, charge * 0.80));
-                }
-            }
-        }
-
-        // ---- garis kecepatan: hanya saat benar-benar ngebut
-        let spd = self.player.vel.length();
-        if spd > 640.0 && self.state == State::Play {
-            let k = ((spd - 640.0) / 520.0).clamp(0.0, 1.0);
+            // sorot kiri-atas
+            draw_orb(p + vec3(-r * 0.42, r * 0.45, r * 0.78), r * 0.24, PALETTE[C_WHITE]);
+            // mata: arah gerak
             let dir = self.player.vel.normalize_or_zero();
-            let nrm = vec2(-dir.y, dir.x);
-            for i in 0..4 {
-                let o = (i as f32 - 1.5) * 9.5;
-                let back = 28.0 + i as f32 * 11.0;
-                let a0 = p - dir * back + nrm * o;
-                let a1 = a0 - dir * (20.0 + 26.0 * k);
-                draw_line(a0.x, a0.y, a1.x, a1.y, 1.8, with_a(PLUM, 0.10 + 0.20 * k));
-            }
-        }
-
-        // ---- bayangan kontak lembut (kanan-bawah, sesuai arah cahaya)
-        shadow_at(
-            &self.shadow_tex,
-            p.x + 4.0,
-            p.y + 7.0,
-            r * 1.95,
-            r * 1.60,
-            0.24,
-        );
-
-        let blink = self.player.invuln > 0.0 && ((self.time * 16.0) as i32 % 2 == 0);
-        let body = if blink { with_a(BODY, 0.45) } else { BODY };
-
-        // ekstrusi → badan → bidang terang → rim light
-        draw_circle(p.x + 1.8, p.y + 3.0, r, shade(body, 0.60));
-        draw_circle(p.x, p.y, r, body);
-        draw_circle(
-            p.x - r * 0.09,
-            p.y - r * 0.11,
-            r * 0.87,
-            mix(body, PAPER, 0.15),
-        );
-        draw_circle(
-            p.x - r * 0.26,
-            p.y - r * 0.30,
-            r * 0.30,
-            with_a(PAPER, 0.50),
-        );
-        draw_circle(
-            p.x - r * 0.34,
-            p.y - r * 0.40,
-            r * 0.13,
-            with_a(PAPER, 0.85),
-        );
-
-        // mata: ikut arah gerak, ada soket + kilau
-        let dir = self.player.vel.normalize_or_zero();
-        let look = if dir.length_squared() > 0.01 {
-            dir
-        } else {
-            vec2(1.0, 0.0)
-        };
-        let ex = p.x + look.x * r * 0.34;
-        let ey = p.y + look.y * r * 0.34;
-        draw_circle(ex + 1.0, ey + 1.6, r * 0.34, with_a(INK, 0.16));
-        draw_circle(ex, ey, r * 0.30, PAPER);
-        draw_circle(
-            ex + look.x * r * 0.10,
-            ey + look.y * r * 0.10,
-            r * 0.16,
-            INK,
-        );
-        draw_circle(
-            ex + look.x * r * 0.06 - r * 0.08,
-            ey + look.y * r * 0.06 - r * 0.09,
-            r * 0.055,
-            PAPER,
-        );
-
-        // simpul syal
-        let kx = p.x - look.x * r * 0.92;
-        let ky = p.y - look.y * r * 0.92;
-        draw_circle(kx + 1.2, ky + 2.0, r * 0.33, shade(tc, 0.62));
-        draw_circle(kx, ky, r * 0.31, tc);
-        draw_circle(kx - r * 0.10, ky - r * 0.12, r * 0.12, mix(tc, PAPER, 0.48));
-
-        // ---- indikator lompat: dua titik. Penuh = siap dipakai.
-        if self.state == State::Play && self.player.attached.is_none() {
-            for k in 0..2u8 {
-                let on = k < self.air_jumps;
-                let x = p.x + (k as f32 - 0.5) * 13.0;
-                let y = p.y + r + 15.0;
-                draw_circle(x, y + 1.4, 3.6, with_a(INK, 0.12));
-                draw_circle(
-                    x,
-                    y,
-                    3.2,
-                    with_a(
-                        if on { MUSTARD } else { INK_SOFT },
-                        if on { 0.9 } else { 0.20 },
+            let look = if dir.length_squared() > 0.01 { dir } else { vec2(1.0, 0.0) };
+            let ex = p.x + look.x * r * 0.42;
+            let ey = p.y - look.y * r * 0.42;
+            draw_at(&m.disc[C_WHITE], model(vec3(ex, ey, r * 0.92), vec3(r * 0.55, r * 0.28, r * 0.55), 0.0, 0.0));
+            draw_at(&m.disc[C_INK], model(vec3(ex + look.x * r * 0.08, ey - look.y * r * 0.08, r * 0.99), vec3(r * 0.24, r * 0.24, r * 0.24), 0.0, 0.0));
+            // syal: 3 segitiga mengikuti arah angin
+            for k in 0..3 {
+                let kf = k as f32;
+                let wave = (t * 6.0 + kf * 1.7).sin() * 0.20;
+                draw_at(
+                    &m.wedge[C_CORAL],
+                    model(
+                        p + vec3(-look.x * r * (1.0 + kf * 0.55), look.y * r * (1.0 + kf * 0.55), 0.10),
+                        vec3(r * (1.0 - kf * 0.22), r * (0.9 - kf * 0.2), r),
+                        0.0,
+                        wave,
                     ),
                 );
-                if on {
-                    draw_circle(x - 0.9, y - 0.9, 1.1, with_a(PAPER, 0.7));
+            }
+            // indikator lompat: dua titik
+            if self.air_jumps > 0 && self.player.attached.is_none() {
+                for k in 0..2u8 {
+                    let on = k < self.air_jumps;
+                    let jx = p.x + (k as f32 - 0.5) * 0.22;
+                    let jy = p.y - r * 1.35;
+                    draw_orb(
+                        vec3(jx, jy, r + 0.12),
+                        0.045,
+                        if on { PALETTE[C_GOLD] } else { PALETTE[C_SLATE] },
+                    );
                 }
             }
         }
+
+        // ====================================================== PARTIKEL ====
+        for pt in self.parts.iter() {
+            let a = (pt.life / pt.max).clamp(0.0, 1.0);
+            let s = pt.size * W3 * (0.5 + a * 0.7);
+            draw_orb(p3(pt.pos) + vec3(0.0, 0.0, 0.12), s.max(0.012), pt.color);
+        }
+
+        // ======================================================= RING ========
+        for r in self.rings.iter() {
+            let k = 1.0 - r.life / r.max;
+            let rad = (r.r0 + (r.r1 - r.r0) * ease_out_cubic(k)) * W3;
+            for s in 0..12 {
+                let a = s as f32 / 12.0 * std::f32::consts::TAU;
+                draw_orb(
+                    p3(r.pos) + vec3(a.cos() * rad, a.sin() * rad, 0.18),
+                    0.022 * (1.0 - k * 0.5),
+                    r.color,
+                );
+            }
+        }
+
+        // ================================================== FOREGROUND =======
+        // Siluet dedaunan paling dekat: memotong segalanya = bingkai hidup.
+        let fg_step = 2.6;
+        let fg_ox = cam.x * W3 * 1.34;
+        let fi0 = ((fg_ox - 6.0) / fg_step).floor() as i64 - 1;
+        let fi1 = ((fg_ox + 6.0) / fg_step).ceil() as i64 + 1;
+        let mut fi = fi0;
+        while fi <= fi1 {
+            let h = hash01(fi as u32 ^ 0x2F1B_9C4D);
+            let x = fi as f32 * fg_step - fg_ox;
+            let y = cy + 4.4 - h * 1.2;
+            let len = 0.55 + h * 0.9;
+            let sway = (t * 0.8 + h * 6.28).sin() * 0.10;
+            draw_beam(
+                vec3(x, y + 0.6, 2.8),
+                vec3(x + sway, y + 0.6 - len, 2.8),
+                0.030,
+                &m.cube[C_INK],
+            );
+            for k in 0..3 {
+                let kf = k as f32;
+                let ly = y + 0.6 - len * (0.35 + kf * 0.22);
+                let lx = x + sway * (0.35 + kf * 0.22);
+                let lr = 0.20 + h * 0.10 - kf * 0.03;
+                draw_at(
+                    &m.wedge[C_INK],
+                    model(vec3(lx + (if k % 2 == 0 { -1.0 } else { 1.0 }) * lr * 0.7, ly, 2.82), vec3(lr, lr, lr), 0.0, (if k % 2 == 0 { 1.0 } else { -1.0 }) * 0.7),
+                );
+            }
+            fi += 1;
+        }
+
+        // ============================================ TEKS & EFEK 2D ========
+        set_camera(&view.ui_cam());
+        for tx in self.texts.iter() {
+            let a = (tx.life / tx.max).clamp(0.0, 1.0);
+            let sp = tx.pos - cam + vec2(vw * 0.5, vh * 0.5);
+            draw_txt_c(&tx.text, sp.x, sp.y + 2.5, tx.size, with_a(INK, a * 0.20), &self.font_d);
+            draw_txt_c(&tx.text, sp.x, sp.y, tx.size, with_a(tx.color, a), &self.font_d);
+        }
+
+        // near-miss: "hampir" jadi momen, bukan sekadar mati
+        if self.near_miss > 0.0 {
+            let a = (self.near_miss / 0.55).clamp(0.0, 1.0);
+            draw_rectangle(0.0, 0.0, vw, vh, with_a(MUSTARD, a * 0.10));
+            draw_txt_c(
+                "SO CLOSE!",
+                vw * 0.5,
+                vh * 0.34 + (1.0 - a) * 10.0,
+                28.0,
+                with_a(MUSTARD, a),
+                &self.font_d,
+            );
+        }
+
+        // petir dari bawah: tepi bawah memanas sebelum sambaran
+        if self.bolts.iter().any(|b| b.warn > 0.0 && !b.struck) {
+            for i in 0..6 {
+                let k = i as f32 / 5.0;
+                draw_rectangle(0.0, vh - 1.0 - k * 34.0, vw, 2.0, with_a(PALETTE[C_BLUE], (1.0 - k) * 0.14));
+            }
+        }
+
+        set_default_camera();
     }
+
 
     fn draw_ui(&mut self, view: &View) {
         let vw = view.vw;
@@ -3285,6 +2961,21 @@ impl Game {
             draw_circle(cx + 5.0, cy - 7.0, 3.2, with_a(VERMILION, cp));
         }
 
+        // ---- meta-progresi: benang & skin (ketuk area ini buat ganti warna)
+        let mp = ease_out_cubic(((tt - 1.62) / 0.6).clamp(0.0, 1.0));
+        if mp > 0.01 && self.unlocked > 1 {
+            let names = ["MERAH", "EMAS", "BIRU", "HIJAU"];
+            let line = format!("{} BENANG   ·   SKIN: {}", self.threads, names[self.skin as usize]);
+            draw_txt_c(
+                &line,
+                vw * 0.5,
+                vh * 0.835 + (1.0 - mp) * 8.0,
+                12.0,
+                with_a(INK_SOFT, 0.85 * mp),
+                &fm,
+            );
+        }
+
         // ---- ornamen ayunan di sudut kanan atas: 3 nilai + bayangan
         if vh > 760.0 {
             let op = ease_out_cubic(((tt - 0.9) / 0.7).clamp(0.0, 1.0));
@@ -3471,6 +3162,27 @@ impl Game {
             }
         }
 
+        // ---- chain & style: ekspresi mastery, bukan sekadar jarak
+        if self.chain > 0 {
+            let a = (self.chain_t / 1.6).clamp(0.0, 1.0);
+            let label = format!("CHAIN ×{}", self.chain);
+            let lw = text_w(&label, &fm, 15.0) + 30.0;
+            pill_card(18.0, y0 + 80.0, lw, 34.0, 17.0, ui * a);
+            draw_txt(&label, 33.0, y0 + 97.0, 15.0, with_a(MUSTARD, ui * a), &fm);
+        }
+        if self.style > 0.0 {
+            let st = format!("STYLE {}", self.style as i32);
+            let stw = text_w(&st, &fm, 12.0);
+            draw_txt(
+                &st,
+                vw - 22.0 - stw,
+                y0 + 82.0,
+                12.0,
+                with_a(INK_SOFT, ui * 0.9),
+                &fm,
+            );
+        }
+
         // ---- terbaik
         let b = format!("TERBAIK {}", self.best as i32);
         let bw = text_w(&b, &fm, 12.0);
@@ -3651,6 +3363,7 @@ impl Game {
         } else {
             "petir".to_string()
         };
+        let sub = format!("{}  ·  +{} BENANG", sub, self.last_threads);
         draw_txt_c(&sub, cx, top + 78.0, 15.0, INK_SOFT, &fm);
 
         // skor besar: 3 nilai
@@ -3676,10 +3389,11 @@ impl Game {
         let rows = [
             ("JARAK", format!("{} m", (self.distance / 10.0) as i32)),
             ("KOMBO", combo_txt),
+            ("STYLE", format!("{}", self.style as i32)),
             ("TERBAIK", format!("{}", self.best as i32)),
         ];
         for (i, (k, v)) in rows.iter().enumerate() {
-            let y = top + 200.0 + i as f32 * 28.0;
+            let y = top + 198.0 + i as f32 * 25.0;
             draw_round_rect(
                 x0 + 24.0,
                 y - 15.0,
@@ -3694,7 +3408,7 @@ impl Game {
         }
 
         if self.new_best {
-            draw_txt_c("REKOR BARU", cx, top + 288.0, 15.0, VERMILION, &fm);
+            draw_txt_c("REKOR BARU", cx, top + 306.0, 15.0, VERMILION, &fm);
         } else if self.best > 1.0 {
             let gap = (self.best - self.score).max(0.0) as i32;
             let line = if gap <= 3 {
@@ -3703,7 +3417,7 @@ impl Game {
                 format!("SELISIH {}", gap)
             };
             let col = if gap <= 3 { VERMILION } else { INK_SOFT };
-            draw_txt_c(&line, cx, top + 288.0, 15.0, col, &fm);
+            draw_txt_c(&line, cx, top + 306.0, 15.0, col, &fm);
         }
 
         // tombol lagi
